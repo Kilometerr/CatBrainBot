@@ -1,0 +1,5 @@
+bot.token=XXXXXXXXXXXXXXXXXXXXX
+channel.id=XXXXXXXXXXXXXXXXXX
+daily.posts=12
+start.hour=9
+end.hour=23
