@@ -5,8 +5,8 @@ import lombok.experimental.UtilityClass;
 
 @UtilityClass
 public class StatusFormatter {
-    private static final int BOX_WIDTH = 42;
-    private static final String BOX_TOP = "╔════════════ CAT BRAIN STATUS ════════════╗";
+    private static final int BOX_WIDTH = 41;
+    private static final String BOX_TOP = "╔════════════ CAT BRAIN STATUS ═════════════╗";
     private static final String BOX_BOTTOM = "╚═══════════════════════════════════════════╝";
 
     public static String format(StatusBox status) {
