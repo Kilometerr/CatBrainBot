@@ -56,8 +56,9 @@ public class CatBrainBot {
             var status = statusService.generateStatus();
             log.debug("Generated status: {}", status);
 
-            var formattedStatus = StatusFormatter.format(status);
-            channel.sendMessage(formattedStatus).queue(
+            var embed = StatusFormatter.format(status);
+
+            channel.sendMessageEmbeds(embed).queue(
                     success -> log.info("Status update posted successfully!"),
                     error -> log.error("Failed to post status update", error)
             );
