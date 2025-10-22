@@ -6,22 +6,26 @@ import java.security.SecureRandom;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
-import java.util.stream.IntStream;
 
 @Slf4j
 public class SchedulerService {
     private static final DateTimeFormatter TIME_FORMATTER = DateTimeFormatter.ofPattern("h:mm a");
+    private static final int MIN_SPACING_MINUTES = 5;
 
-    private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
+    private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(2);
     private final Random random = new SecureRandom();
+    private final List<ScheduledFuture<?>> scheduledPosts = new ArrayList<>();
+    private ScheduledFuture<?> midnightTask;
 
     public void scheduleDailyPosts(int postCount, int startHour, int endHour, Runnable postAction) {
-        var scheduledTimes = generateRandomTimes(postCount, startHour, endHour)
+        var scheduledTimes = generateRandomTimesWithSpacing(postCount, startHour, endHour)
                 .stream()
                 .sorted()
                 .toList();
@@ -33,6 +37,8 @@ public class SchedulerService {
         scheduledTimes.stream()
                 .filter(time -> time.isAfter(now))
                 .forEach(time -> schedulePost(time, now, postAction));
+
+        scheduleMidnightReschedule(postCount, startHour, endHour, postAction);
     }
 
     private void schedulePost(LocalDateTime scheduledTime, LocalDateTime now, Runnable postAction) {
@@ -43,28 +49,85 @@ public class SchedulerService {
             return;
         }
 
-        scheduler.schedule(postAction, delayMinutes, TimeUnit.MINUTES);
+        var future = scheduler.schedule(postAction, delayMinutes, TimeUnit.MINUTES);
+        scheduledPosts.add(future);
+        log.debug("Post scheduled for {} (in {} minutes)", scheduledTime.format(TIME_FORMATTER), delayMinutes);
     }
 
-    private List<LocalDateTime> generateRandomTimes(int count, int startHour, int endHour) {
+    private void scheduleMidnightReschedule(int postCount, int startHour, int endHour, Runnable postAction) {
+        var now = LocalDateTime.now();
+        var nextMidnight = now.toLocalDate().plusDays(1).atStartOfDay();
+        var delayMinutes = ChronoUnit.MINUTES.between(now, nextMidnight);
+
+        log.info("Next schedule refresh at midnight: {} (in {} minutes)",
+                nextMidnight.format(TIME_FORMATTER), delayMinutes);
+
+        midnightTask = scheduler.schedule(() -> {
+            log.info("=== Midnight reached - rescheduling daily posts ===");
+            clearPreviousDayTasks();
+            scheduleDailyPosts(postCount, startHour, endHour, postAction);
+        }, delayMinutes, TimeUnit.MINUTES);
+    }
+
+    private void clearPreviousDayTasks() {
+        int remainingTasks = (int) scheduledPosts.stream()
+                .filter(future -> !future.isDone())
+                .count();
+
+        log.info("Clearing {} remaining tasks from previous day", remainingTasks);
+
+        scheduledPosts.forEach(future -> {
+            if (!future.isDone()) {
+                future.cancel(false);
+            }
+        });
+        scheduledPosts.clear();
+
+        if (midnightTask != null && !midnightTask.isDone()) {
+            midnightTask.cancel(false);
+        }
+    }
+
+    private List<LocalDateTime> generateRandomTimesWithSpacing(int count, int startHour, int endHour) {
         var today = LocalDateTime.now().toLocalDate().atStartOfDay();
         var windowMinutes = (endHour - startHour) * 60;
         var startMinute = startHour * 60;
 
-        return IntStream.range(0, count)
-                .mapToObj(i -> {
-                    var randomMinute = startMinute + random.nextInt(windowMinutes);
-                    return today
-                            .withHour(randomMinute / 60)
-                            .withMinute(randomMinute % 60)
-                            .withSecond(0)
-                            .withNano(0);
-                })
-                .toList();
+        var segmentSize = windowMinutes / count;
+
+        if (segmentSize < MIN_SPACING_MINUTES) {
+            log.warn("Window too small for {} posts with {} minute spacing. Posts will be packed tighter.",
+                    count, MIN_SPACING_MINUTES);
+        }
+
+        List<LocalDateTime> times = new ArrayList<>();
+
+        for (int i = 0; i < count; i++) {
+            var segmentStart = startMinute + (i * segmentSize);
+            var segmentEnd = Math.min(segmentStart + segmentSize, startMinute + windowMinutes);
+
+            if (i > 0) {
+                segmentStart = Math.max(segmentStart, startMinute + (i * MIN_SPACING_MINUTES));
+            }
+
+            var availableRange = Math.max(1, segmentEnd - segmentStart);
+            var randomOffset = random.nextInt(availableRange);
+            var minute = Math.min(segmentStart + randomOffset, startMinute + windowMinutes - 1);
+
+            times.add(today
+                    .withHour(minute / 60)
+                    .withMinute(minute % 60)
+                    .withSecond(0)
+                    .withNano(0));
+        }
+
+        return times;
     }
 
     public void shutdown() {
         log.info("Shutting down scheduler...");
+
+        clearPreviousDayTasks();
         scheduler.shutdown();
 
         try {
