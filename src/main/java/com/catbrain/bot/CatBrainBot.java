@@ -1,6 +1,7 @@
 package com.catbrain.bot;
 
 import com.catbrain.bot.config.BotConfig;
+import com.catbrain.bot.listener.SlashCommandListener;
 import com.catbrain.bot.service.SchedulerService;
 import com.catbrain.bot.service.StatusService;
 import com.catbrain.bot.util.StatusFormatter;
@@ -8,6 +9,8 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.JDABuilder;
+import net.dv8tion.jda.api.interactions.commands.build.Commands;
+import net.dv8tion.jda.api.interactions.commands.build.SubcommandData;
 import net.dv8tion.jda.api.requests.GatewayIntent;
 import org.jetbrains.annotations.NotNull;
 
@@ -30,8 +33,36 @@ public class CatBrainBot {
 
         log.info("Connected to Discord!");
 
+        registerSlashCommands();
+        registerEventListeners();
         scheduleDailyPosts();
         registerShutdownHook();
+    }
+
+    private void registerSlashCommands() {
+        log.info("Registering slash commands...");
+
+        var catbrainCommand = Commands.slash("catbrain", "Cat Brain Bot commands")
+                .addSubcommands(
+                        new SubcommandData("check", "Check the current cat brain status"),
+                        new SubcommandData("help", "Show help information and available commands"),
+                        new SubcommandData("changelog", "View recent changes and updates")
+                );
+
+        jda.updateCommands()
+                .addCommands(catbrainCommand)
+                .queue(
+                        success -> log.info("Slash commands registered successfully"),
+                        error -> log.error("Failed to register slash commands", error)
+                );
+
+        log.info("Command registration initiated (may take up to 1 hour to propagate globally)");
+    }
+
+    private void registerEventListeners() {
+        var slashCommandListener = new SlashCommandListener(statusService, config.channelId());
+        jda.addEventListener(slashCommandListener);
+        log.info("Event listeners registered");
     }
 
     private void scheduleDailyPosts() {
