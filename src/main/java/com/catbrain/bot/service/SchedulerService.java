@@ -3,6 +3,7 @@ package com.catbrain.bot.service;
 import lombok.extern.slf4j.Slf4j;
 
 import java.security.SecureRandom;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
@@ -25,6 +26,8 @@ public class SchedulerService {
     private ScheduledFuture<?> midnightTask;
 
     public void scheduleDailyPosts(int postCount, int startHour, int endHour, Runnable postAction) {
+        var now = LocalDateTime.now();
+
         var scheduledTimes = generateRandomTimesWithSpacing(postCount, startHour, endHour)
                 .stream()
                 .sorted()
@@ -33,39 +36,76 @@ public class SchedulerService {
         log.info("Scheduled {} posts for today:", postCount);
         scheduledTimes.forEach(time -> log.info("  - {}", time.format(TIME_FORMATTER)));
 
-        var now = LocalDateTime.now();
-        scheduledTimes.stream()
-                .filter(time -> time.isAfter(now))
-                .forEach(time -> schedulePost(time, now, postAction));
+        int scheduled = 0;
+        for (LocalDateTime time : scheduledTimes) {
+            if (time.isAfter(now)) {
+                schedulePost(time, postAction);
+                scheduled++;
+            } else {
+                log.debug("Skipping past time: {}", time.format(TIME_FORMATTER));
+            }
+        }
+
+        log.info("Scheduled {} posts (skipped {} past times)", scheduled, postCount - scheduled);
 
         scheduleMidnightReschedule(postCount, startHour, endHour, postAction);
     }
 
-    private void schedulePost(LocalDateTime scheduledTime, LocalDateTime now, Runnable postAction) {
+    private void schedulePost(LocalDateTime scheduledTime, Runnable postAction) {
+        var now = LocalDateTime.now();
         var delayMinutes = ChronoUnit.MINUTES.between(now, scheduledTime);
 
         if (delayMinutes < 0) {
-            log.warn("Skipping past time: {}", scheduledTime.format(TIME_FORMATTER));
+            log.warn("Negative delay calculated for {}: {} minutes",
+                    scheduledTime.format(TIME_FORMATTER), delayMinutes);
             return;
         }
 
-        var future = scheduler.schedule(postAction, delayMinutes, TimeUnit.MINUTES);
+        if (delayMinutes == 0) {
+            delayMinutes = 1;
+        }
+
+        log.debug("Scheduling post for {} in {} minutes",
+                scheduledTime.format(TIME_FORMATTER), delayMinutes);
+
+        Runnable safePostAction = () -> {
+            try {
+                log.info("Executing scheduled post now (was scheduled for {})",
+                        scheduledTime.format(TIME_FORMATTER));
+                postAction.run();
+            } catch (Exception e) {
+                log.error("Error executing post action", e);
+            }
+        };
+
+        var future = scheduler.schedule(safePostAction, delayMinutes, TimeUnit.MINUTES);
         scheduledPosts.add(future);
-        log.debug("Post scheduled for {} (in {} minutes)", scheduledTime.format(TIME_FORMATTER), delayMinutes);
+
+        log.debug("Post successfully scheduled for {}", scheduledTime.format(TIME_FORMATTER));
     }
 
     private void scheduleMidnightReschedule(int postCount, int startHour, int endHour, Runnable postAction) {
         var now = LocalDateTime.now();
+
         var nextMidnight = now.toLocalDate().plusDays(1).atStartOfDay();
         var delayMinutes = ChronoUnit.MINUTES.between(now, nextMidnight);
 
-        log.info("Next schedule refresh at midnight: {} (in {} minutes)",
-                nextMidnight.format(TIME_FORMATTER), delayMinutes);
+        if (delayMinutes <= 0) {
+            log.warn("Calculated delay to midnight was {} minutes, using 1440 (24 hours)", delayMinutes);
+            delayMinutes = 1440;
+        }
+
+        log.info("Next schedule refresh at midnight in {} minutes ({} hours)",
+                delayMinutes, delayMinutes / 60);
 
         midnightTask = scheduler.schedule(() -> {
-            log.info("=== Midnight reached - rescheduling daily posts ===");
-            clearPreviousDayTasks();
-            scheduleDailyPosts(postCount, startHour, endHour, postAction);
+            try {
+                log.info("=== Midnight reached - rescheduling daily posts ===");
+                clearPreviousDayTasks();
+                scheduleDailyPosts(postCount, startHour, endHour, postAction);
+            } catch (Exception e) {
+                log.error("Error during midnight rescheduling", e);
+            }
         }, delayMinutes, TimeUnit.MINUTES);
     }
 
@@ -74,7 +114,8 @@ public class SchedulerService {
                 .filter(future -> !future.isDone())
                 .count();
 
-        log.info("Clearing {} remaining tasks from previous day", remainingTasks);
+        log.info("Clearing {} remaining tasks from previous day (total: {})",
+                remainingTasks, scheduledPosts.size());
 
         scheduledPosts.forEach(future -> {
             if (!future.isDone()) {
@@ -89,7 +130,27 @@ public class SchedulerService {
     }
 
     private List<LocalDateTime> generateRandomTimesWithSpacing(int count, int startHour, int endHour) {
-        var today = LocalDateTime.now().toLocalDate().atStartOfDay();
+        var now = LocalDateTime.now();
+        var currentHour = now.getHour();
+
+        LocalDate targetDate;
+        if (currentHour < startHour) {
+            targetDate = now.toLocalDate();
+            log.debug("Scheduling for today (current hour {} is before start hour {})",
+                    currentHour, startHour);
+        } else if (currentHour < endHour) {
+            targetDate = now.toLocalDate();
+            log.debug("Scheduling for today (current hour {} is within window {}-{})",
+                    currentHour, startHour, endHour);
+        } else {
+            targetDate = now.toLocalDate().plusDays(1);
+            log.debug("Scheduling for tomorrow (current hour {} is after end hour {})",
+                    currentHour, endHour);
+        }
+
+        var baseDate = targetDate.atStartOfDay();
+        log.debug("Target date for scheduling: {}", baseDate.toLocalDate());
+
         var windowMinutes = (endHour - startHour) * 60;
         var startMinute = startHour * 60;
 
@@ -114,11 +175,13 @@ public class SchedulerService {
             var randomOffset = random.nextInt(availableRange);
             var minute = Math.min(segmentStart + randomOffset, startMinute + windowMinutes - 1);
 
-            times.add(today
+            var scheduledTime = baseDate
                     .withHour(minute / 60)
                     .withMinute(minute % 60)
                     .withSecond(0)
-                    .withNano(0));
+                    .withNano(0);
+
+            times.add(scheduledTime);
         }
 
         return times;
@@ -138,5 +201,7 @@ public class SchedulerService {
             scheduler.shutdownNow();
             Thread.currentThread().interrupt();
         }
+
+        log.info("Scheduler shutdown complete");
     }
 }
