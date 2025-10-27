@@ -161,6 +161,16 @@ public class SchedulerService {
         var startMinute = startHour * 60;
 
         var minSpan = Math.max(MIN_SPACING_MINUTES, 1);
+
+        long requiredMinutes = (count - 1) * (long) minSpan;
+        if (count > 0 && requiredMinutes >= windowMinutes) {
+            log.error("Cannot fit {} posts with {}-minute spacing in window of {}m (requires {}m minimum)",
+                    count, minSpan, windowMinutes, requiredMinutes);
+            throw new IllegalArgumentException(String.format(
+                    "Window too small: %d posts need %dm spacing = %dm, but window is only %dm",
+                    count, minSpan, requiredMinutes, windowMinutes));
+        }
+
         if (count > 0 && count * minSpan > windowMinutes) {
             log.warn("Requested {} posts do not fit {}-minute spacing in window ({}m). Will compress spacing.",
                     count, minSpan, windowMinutes);
@@ -206,18 +216,43 @@ public class SchedulerService {
         var windowStart = baseDate.plusMinutes(startMinute);
         if (!times.isEmpty() && times.get(0).isBefore(windowStart)) {
             long shift = ChronoUnit.MINUTES.between(times.get(0), windowStart);
+            log.debug("First time is before windowStart, applying {}m shift to all times", shift);
 
-            for (int i = 0; i < times.size(); i++) {
-                if (times.get(i).isBefore(windowStart)) {
-                    times.set(i, times.get(i).plusMinutes(shift));
-                } else {
-                    break;
+            times.replaceAll(localDateTime -> localDateTime.plusMinutes(shift));
+            for (int i = 1; i < times.size(); i++) {
+                var prev = times.get(i - 1);
+                var curr = times.get(i);
+                long gap = ChronoUnit.MINUTES.between(prev, curr);
+                if (gap < minSpan) {
+                    times.set(i, prev.plusMinutes(minSpan));
+                    log.debug("Adjusted time[{}] to maintain {}m spacing", i, minSpan);
                 }
             }
 
+            boolean clamped = false;
             for (int i = 0; i < times.size(); i++) {
                 if (times.get(i).isAfter(windowEnd)) {
                     times.set(i, windowEnd);
+                    clamped = true;
+                    log.debug("Clamped time[{}] to windowEnd", i);
+                }
+            }
+
+            if (clamped) {
+                for (int i = times.size() - 2; i >= 0; i--) {
+                    var next = times.get(i + 1);
+                    var curr = times.get(i);
+                    long gap = ChronoUnit.MINUTES.between(curr, next);
+                    if (gap < minSpan) {
+                        var newTime = next.minusMinutes(minSpan);
+                        if (newTime.isBefore(windowStart)) {
+                            log.warn("Cannot maintain {}m spacing after clamping, bunching times at boundaries", minSpan);
+                            times.set(i, windowStart);
+                        } else {
+                            times.set(i, newTime);
+                            log.debug("Adjusted time[{}] backwards to maintain {}m spacing after clamping", i, minSpan);
+                        }
+                    }
                 }
             }
         }
