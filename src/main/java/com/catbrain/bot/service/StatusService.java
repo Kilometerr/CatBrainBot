@@ -4,6 +4,8 @@ import com.catbrain.bot.model.StatusBox;
 import lombok.extern.slf4j.Slf4j;
 
 import java.security.SecureRandom;
+import java.time.Duration;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Random;
 
@@ -31,8 +33,8 @@ public class StatusService {
             "30 seconds", "10 seconds", "3 seconds", "What were we talking about?"
     );
 
-    public StatusBox generateStatus() {
-        log.debug("Generating new status box");
+    public StatusBox generateStatus(LocalDateTime nextPostTime) {
+        log.debug("Generating new status box (next post time: {})", nextPostTime);
 
         return new StatusBox(
                 generateBraincellStatus(),
@@ -40,7 +42,7 @@ public class StatusService {
                 randomFrom(CONFUSION_LEVELS),
                 randomFrom(PROCESSING_SPEEDS),
                 randomFrom(MEMORY_CACHES),
-                generateSmartThoughtETA()
+                generateSmartThoughtETA(nextPostTime)
         );
     }
 
@@ -54,9 +56,30 @@ public class StatusService {
         return random.nextInt(101); // 0 to 100 inclusive
     }
 
-    private String generateSmartThoughtETA() {
-        var minutes = 1 + random.nextInt(59); // 1 to 59
-        var seconds = random.nextInt(60); // 0 to 59
+    private String generateSmartThoughtETA(LocalDateTime nextPostTime) {
+        if (nextPostTime == null) {
+            var minutes = 1 + random.nextInt(59); // 1 to 59
+            var seconds = random.nextInt(60); // 0 to 59
+            return "%dm %ds".formatted(minutes, seconds);
+        }
+
+        var now = LocalDateTime.now();
+
+        if (nextPostTime.isBefore(now) || nextPostTime.equals(now)) {
+            return "Now!";
+        }
+
+        var duration = Duration.between(now, nextPostTime);
+        var totalSeconds = duration.getSeconds();
+
+        if (totalSeconds >= 3600) {
+            var hours = totalSeconds / 3600;
+            var minutes = (totalSeconds % 3600) / 60;
+            return "%dh %dm".formatted(hours, minutes);
+        }
+
+        var minutes = totalSeconds / 60;
+        var seconds = totalSeconds % 60;
         return "%dm %ds".formatted(minutes, seconds);
     }
 
