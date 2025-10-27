@@ -9,6 +9,7 @@ import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.Random;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -23,21 +24,25 @@ public class SchedulerService {
     private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(2);
     private final Random random = new SecureRandom();
     private final List<ScheduledFuture<?>> scheduledPosts = new ArrayList<>();
+    private final List<LocalDateTime> scheduledTimes = new ArrayList<>();
     private ScheduledFuture<?> midnightTask;
 
     public void scheduleDailyPosts(int postCount, int startHour, int endHour, Runnable postAction) {
         var now = LocalDateTime.now();
 
-        var scheduledTimes = generateRandomTimesWithSpacing(postCount, startHour, endHour)
+        var times = generateRandomTimesWithSpacing(postCount, startHour, endHour)
                 .stream()
                 .sorted()
                 .toList();
 
+        scheduledTimes.clear();
+        scheduledTimes.addAll(times);
+
         log.info("Scheduled {} posts for today:", postCount);
-        scheduledTimes.forEach(time -> log.info("  - {}", time.format(TIME_FORMATTER)));
+        times.forEach(time -> log.info("  - {}", time.format(TIME_FORMATTER)));
 
         int scheduled = 0;
-        for (LocalDateTime time : scheduledTimes) {
+        for (LocalDateTime time : times) {
             if (time.isAfter(now)) {
                 schedulePost(time, postAction);
                 scheduled++;
@@ -49,6 +54,13 @@ public class SchedulerService {
         log.info("Scheduled {} posts (skipped {} past times)", scheduled, postCount - scheduled);
 
         scheduleMidnightReschedule(postCount, startHour, endHour, postAction);
+    }
+
+    public Optional<LocalDateTime> getNextScheduledPostTime() {
+        var now = LocalDateTime.now();
+        return scheduledTimes.stream()
+                .filter(time -> time.isAfter(now))
+                .min(LocalDateTime::compareTo);
     }
 
     private void schedulePost(LocalDateTime scheduledTime, Runnable postAction) {
@@ -123,6 +135,7 @@ public class SchedulerService {
             }
         });
         scheduledPosts.clear();
+        scheduledTimes.clear();
 
         if (midnightTask != null && !midnightTask.isDone()) {
             midnightTask.cancel(false);

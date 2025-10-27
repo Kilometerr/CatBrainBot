@@ -60,7 +60,7 @@ public class CatBrainBot {
     }
 
     private void registerEventListeners() {
-        var slashCommandListener = new SlashCommandListener(statusService, config.channelId());
+        var slashCommandListener = new SlashCommandListener(statusService, schedulerService, config.channelId());
         jda.addEventListener(slashCommandListener);
         log.info("Event listeners registered");
     }
@@ -84,8 +84,9 @@ public class CatBrainBot {
                 return;
             }
 
-            var status = statusService.generateStatus();
-            log.debug("Generated status: {}", status);
+            var nextPostTime = schedulerService.getNextScheduledPostTime().orElse(null);
+            var status = statusService.generateStatus(nextPostTime);
+            log.debug("Generated status: {} (next post at: {})", status, nextPostTime);
 
             var embed = StatusFormatter.format(status);
 

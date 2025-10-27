@@ -1,5 +1,6 @@
 package com.catbrain.bot.listener;
 
+import com.catbrain.bot.service.SchedulerService;
 import com.catbrain.bot.service.StatusService;
 import com.catbrain.bot.util.StatusFormatter;
 import lombok.RequiredArgsConstructor;
@@ -16,6 +17,7 @@ import java.time.Instant;
 @RequiredArgsConstructor
 public class SlashCommandListener extends ListenerAdapter {
     private final StatusService statusService;
+    private final SchedulerService schedulerService;
     private final String channelId;
 
     @Override
@@ -62,7 +64,8 @@ public class SlashCommandListener extends ListenerAdapter {
         event.deferReply().queue();
 
         try {
-            var status = statusService.generateStatus();
+            var nextPostTime = schedulerService.getNextScheduledPostTime().orElse(null);
+            var status = statusService.generateStatus(nextPostTime);
             var embed = StatusFormatter.format(status);
 
             event.getHook().sendMessageEmbeds(embed).queue(
@@ -91,7 +94,7 @@ public class SlashCommandListener extends ListenerAdapter {
                         "Displays recent updates and changes to the bot.",
                         false
                 )
-                .setFooter("Cat Brain Bot v0.1.4")
+                .setFooter("Cat Brain Bot v0.1.5")
                 .setTimestamp(Instant.now())
                 .build();
 
@@ -104,25 +107,25 @@ public class SlashCommandListener extends ListenerAdapter {
                 .setTitle("Cat Brain Bot - Changelog")
                 .setColor(new Color(67, 181, 129))
                 .addField(
-                        "Last Stable Update: Version 0.1.0",
+                        "Last Stable Update: Version 0.2.0",
                         """
-                        Changes:
-                        • Initial release
-                        • Random status generation
-                        • Scheduled daily posts
-                        • Braincell tracking system
-                        """,
+                                Changes:
+                                - Automatic re-scheduling at midnight
+                                - Totally needed multithreading
+                                - Basic slash commands
+                                - Smart Thought ETA actually counts down
+                                - Dynamic box formatting
+                                - Time collision prevention
+                                """,
                         false
                 )
                 .addField(
-                        "Current update (experimental): Version 0.1.4",
+                        "Current update (experimental): -",
                         """
-                        • Automatic re-scheduling at midnight
-                        • Added slash commands (/catbrain <help, check, changelog>)
-                        """,
+                                """,
                         false
                 )
-                .setFooter("Cat Brain Bot v0.1.4")
+                .setFooter("Cat Brain Bot v0.1.5")
                 .setTimestamp(Instant.now())
                 .build();
 
