@@ -1,6 +1,7 @@
 package com.catbrain.bot;
 
 import com.catbrain.bot.config.BotConfig;
+import com.catbrain.bot.listener.SlashCommandListener;
 import com.catbrain.bot.service.SchedulerService;
 import com.catbrain.bot.service.StatusService;
 import com.catbrain.bot.util.StatusFormatter;
@@ -8,6 +9,9 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.JDABuilder;
+import net.dv8tion.jda.api.interactions.commands.build.CommandData;
+import net.dv8tion.jda.api.interactions.commands.build.Commands;
+import net.dv8tion.jda.api.interactions.commands.build.SubcommandData;
 import net.dv8tion.jda.api.requests.GatewayIntent;
 import org.jetbrains.annotations.NotNull;
 
@@ -24,14 +28,66 @@ public class CatBrainBot {
         log.info("Cat Brain Bot starting...");
 
         jda = JDABuilder.createDefault(config.botToken())
-                .enableIntents(GatewayIntent.GUILD_MESSAGES, GatewayIntent.MESSAGE_CONTENT)
+                .enableIntents(GatewayIntent.GUILD_MESSAGES)
                 .build()
                 .awaitReady();
 
         log.info("Connected to Discord!");
 
+        registerSlashCommands();
+        registerEventListeners();
         scheduleDailyPosts();
         registerShutdownHook();
+    }
+
+    private void registerSlashCommands() {
+        log.info("Registering slash commands...");
+
+        var catbrainCommand = Commands.slash("catbrain", "Cat Brain Bot commands")
+                .addSubcommands(
+                        new SubcommandData("check", "Check the current cat brain status"),
+                        new SubcommandData("help", "Show help information and available commands"),
+                        new SubcommandData("changelog", "View recent changes and updates")
+                );
+
+        if (config.guildId() != null) {
+            var guild = jda.getGuildById(config.guildId());
+            if (guild != null) {
+                guild.updateCommands()
+                        .addCommands(catbrainCommand)
+                        .queue(
+                                success -> log.info("Slash commands registered successfully (guild-scoped)"),
+                                error -> log.error("Failed to register guild-scoped slash commands", error)
+                        );
+                log.info("Command registration initiated (guild-scoped - instant propagation)");
+            } else {
+                log.warn("Guild ID configured but guild not found: {}", config.guildId());
+                registerGlobalCommands(catbrainCommand);
+            }
+        } else {
+            registerGlobalCommands(catbrainCommand);
+        }
+    }
+
+    private void registerGlobalCommands(CommandData catbrainCommand) {
+        jda.updateCommands()
+                .addCommands(catbrainCommand)
+                .queue(
+                        success -> log.info("Slash commands registered successfully (global)"),
+                        error -> log.error("Failed to register global slash commands", error)
+                );
+        log.info("Command registration initiated (global - may take up to 1 hour to propagate)");
+    }
+
+    private void registerEventListeners() {
+        var slashCommandListener = new SlashCommandListener(
+                statusService,
+                schedulerService,
+                config.channelId(),
+                config.guildId()
+        );
+        jda.addEventListener(slashCommandListener);
+        log.info("Event listeners registered");
     }
 
     private void scheduleDailyPosts() {
@@ -53,11 +109,13 @@ public class CatBrainBot {
                 return;
             }
 
-            var status = statusService.generateStatus();
-            log.debug("Generated status: {}", status);
+            var nextPostTime = schedulerService.getNextScheduledPostTime().orElse(null);
+            var status = statusService.generateStatus(nextPostTime);
+            log.debug("Generated status: {} (next post at: {})", status, nextPostTime);
 
-            var formattedStatus = StatusFormatter.format(status);
-            channel.sendMessage(formattedStatus).queue(
+            var embed = StatusFormatter.format(status);
+
+            channel.sendMessageEmbeds(embed).queue(
                     success -> log.info("Status update posted successfully!"),
                     error -> log.error("Failed to post status update", error)
             );

@@ -2,6 +2,7 @@ package com.catbrain.bot.config;
 
 import lombok.extern.slf4j.Slf4j;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 
 import java.io.IOException;
 import java.util.Optional;
@@ -11,6 +12,7 @@ import java.util.Properties;
 public record BotConfig(
         @NotNull String botToken,
         @NotNull String channelId,
+        @Nullable String guildId,
         int dailyPosts,
         int startHour,
         int endHour
@@ -31,15 +33,20 @@ public record BotConfig(
     public static BotConfig load() throws IOException {
         var properties = loadProperties();
 
-        // Fallback to env vars for secrets
         var botToken = getProperty(properties, "bot.token", "BOT_TOKEN");
         var channelId = getProperty(properties, "channel.id", "CHANNEL_ID");
-        var dailyPosts = getIntProperty(properties, "daily.posts");
-        var startHour = getIntProperty(properties, "start.hour");
-        var endHour = getIntProperty(properties, "end.hour");
+        var guildId = getOptionalProperty(properties);
+        var dailyPosts = getIntProperty(properties, "daily.posts", "DAILY_POSTS");
+        var startHour = getIntProperty(properties, "start.hour", "START_HOUR");
+        var endHour = getIntProperty(properties, "end.hour", "END_HOUR");
 
-        log.info("Configuration loaded successfully.");
-        return new BotConfig(botToken, channelId, dailyPosts, startHour, endHour);
+        if (guildId != null) {
+            log.info("Configuration loaded successfully (guild-restricted mode).");
+        } else {
+            log.info("Configuration loaded successfully (guild ID not set - bot will work in any guild).");
+        }
+
+        return new BotConfig(botToken, channelId, guildId, dailyPosts, startHour, endHour);
     }
 
     private static Properties loadProperties() throws IOException {
@@ -55,20 +62,35 @@ public record BotConfig(
 
     private static String getProperty(Properties properties, String propertyKey, String envKey) {
         return Optional.ofNullable(System.getenv(envKey))
-                .or(() -> Optional.ofNullable(properties.getProperty(propertyKey)))
+                .map(String::trim)
+                .or(() -> Optional.ofNullable(properties.getProperty(propertyKey))
+                        .map(String::trim))
                 .filter(s -> !s.isBlank())
                 .orElseThrow(() -> new IllegalStateException(
                         "Missing required property: %s (or env var: %s)".formatted(propertyKey, envKey)
                 ));
     }
 
-    private static int getIntProperty(Properties properties, String key) {
-        var value = Optional.ofNullable(properties.getProperty(key))
+    private static String getOptionalProperty(Properties properties) {
+        return Optional.ofNullable(System.getenv("GUILD_ID"))
+                .map(String::trim)
+                .or(() -> Optional.ofNullable(properties.getProperty("guild.id"))
+                        .map(String::trim))
                 .filter(s -> !s.isBlank())
-                .orElseThrow(() -> new IllegalStateException("Missing required property: " + key));
+                .orElse(null);
+    }
+
+    private static int getIntProperty(Properties properties, String key, String envKey) {
+        var value = Optional.ofNullable(System.getenv(envKey))
+                .map(String::trim)
+                .or(() -> Optional.ofNullable(properties.getProperty(key))
+                        .map(String::trim))
+                .filter(s -> !s.isBlank())
+                .orElseThrow(() -> new IllegalStateException(
+                        "Missing required property: %s (or env var: %s)".formatted(key, envKey)));
 
         try {
-            return Integer.parseInt(value.trim());
+            return Integer.parseInt(value);
         } catch (NumberFormatException e) {
             throw new IllegalStateException("Invalid integer value for %s: %s".formatted(key, value), e);
         }

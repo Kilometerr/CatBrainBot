@@ -2,38 +2,67 @@ package com.catbrain.bot.util;
 
 import com.catbrain.bot.model.StatusBox;
 import lombok.experimental.UtilityClass;
+import net.dv8tion.jda.api.EmbedBuilder;
+import net.dv8tion.jda.api.entities.MessageEmbed;
+
+import java.awt.*;
+import java.time.Instant;
 
 @UtilityClass
 public class StatusFormatter {
-    private static final int BOX_WIDTH = 41;
-    private static final String BOX_TOP = "╔════════════ CAT BRAIN STATUS ═════════════╗";
-    private static final String BOX_BOTTOM = "╚═══════════════════════════════════════════╝";
 
-    public static String format(StatusBox status) {
-        return """
-            ```
-            %s
-            %s%s%s%s%s%s%s
-            ```
-            """.formatted(
-                BOX_TOP,
-                formatLine("Braincell Status: " + status.braincellStatus()),
-                formatLine("Coherence Level: " + status.coherenceLevel() + "%"),
-                formatLine("Confusion Index: " + status.confusionIndex()),
-                formatLine("Processing Speed: " + status.processingSpeed()),
-                formatLine("Memory Cache: " + status.memoryCache()),
-                formatLine("Smart Thought ETA: " + status.smartThoughtETA()),
-                BOX_BOTTOM
+    private static final Color COLOR_ONLINE = new Color(67, 181, 129);
+    private static final Color COLOR_OFFLINE = new Color(240, 71, 71);
+    private static final Color COLOR_BUFFERING = new Color(250, 166, 26);
+    private static final Color COLOR_NOT_FOUND = new Color(153, 170, 181);
+    private static final Color COLOR_DEFAULT = new Color(88, 101, 242);
+
+    public static MessageEmbed format(StatusBox status) {
+        return createEmbed(
+                status.braincellStatus(),
+                status.coherenceLevel(),
+                status.confusionIndex(),
+                status.processingSpeed(),
+                status.memoryCache(),
+                status.smartThoughtETA()
         );
     }
 
-    private static String formatLine(String content) {
-        return "║ %s ║\n".formatted(padRight(content));
+    public static MessageEmbed createEmbed(
+            String braincell,
+            int coherence,
+            String confusion,
+            String processing,
+            String memory,
+            String eta) {
+
+        EmbedBuilder embed = new EmbedBuilder();
+
+        embed.setTitle("🧠 Cat Brain Status Report");
+        embed.setColor(getColorForStatus(braincell));
+
+        embed.addField("🔌 Braincell Status", braincell, true);
+        embed.addField("📊 Coherence Level", coherence + "%", true);
+
+        embed.addField("😵 Confusion Index", confusion, true);
+        embed.addField("⚡ Processing Speed", processing, true);
+
+        embed.addField("💾 Memory Cache", memory, true);
+        embed.addField("💡 Smart Thought ETA", eta, true);
+
+        embed.setFooter("Status checked");
+        embed.setTimestamp(Instant.now());
+
+        return embed.build();
     }
 
-    private static String padRight(String s) {
-        return s.length() >= StatusFormatter.BOX_WIDTH
-                ? s.substring(0, StatusFormatter.BOX_WIDTH)
-                : s + " ".repeat(StatusFormatter.BOX_WIDTH - s.length());
+    private static Color getColorForStatus(String status) {
+        return switch (status.toLowerCase(java.util.Locale.ROOT)) {
+            case "online" -> COLOR_ONLINE;
+            case "offline" -> COLOR_OFFLINE;
+            case "buffering" -> COLOR_BUFFERING;
+            case "404 not found" -> COLOR_NOT_FOUND;
+            default -> COLOR_DEFAULT;
+        };
     }
 }
