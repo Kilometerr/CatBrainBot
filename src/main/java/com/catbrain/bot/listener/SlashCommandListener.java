@@ -61,7 +61,7 @@ public class SlashCommandListener extends ListenerAdapter {
     }
 
     private void handleCheckCommand(SlashCommandInteractionEvent event) {
-        event.deferReply().queue();
+        event.deferReply(true).queue();
 
         try {
             var nextPostTime = schedulerService.getNextScheduledPostTime().orElse(null);
@@ -75,7 +75,6 @@ public class SlashCommandListener extends ListenerAdapter {
         } catch (Exception e) {
             log.error("Error generating status for check command", e);
             event.getHook().sendMessage("❌ Failed to generate status.")
-                    .setEphemeral(true)
                     .queue();
         }
     }
