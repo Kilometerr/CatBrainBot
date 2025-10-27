@@ -9,6 +9,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.JDABuilder;
+import net.dv8tion.jda.api.interactions.commands.build.CommandData;
 import net.dv8tion.jda.api.interactions.commands.build.Commands;
 import net.dv8tion.jda.api.interactions.commands.build.SubcommandData;
 import net.dv8tion.jda.api.requests.GatewayIntent;
@@ -49,14 +50,33 @@ public class CatBrainBot {
                         new SubcommandData("changelog", "View recent changes and updates")
                 );
 
+        if (config.guildId() != null) {
+            var guild = jda.getGuildById(config.guildId());
+            if (guild != null) {
+                guild.updateCommands()
+                        .addCommands(catbrainCommand)
+                        .queue(
+                                success -> log.info("Slash commands registered successfully (guild-scoped)"),
+                                error -> log.error("Failed to register guild-scoped slash commands", error)
+                        );
+                log.info("Command registration initiated (guild-scoped - instant propagation)");
+            } else {
+                log.warn("Guild ID configured but guild not found: {}", config.guildId());
+                registerGlobalCommands(catbrainCommand);
+            }
+        } else {
+            registerGlobalCommands(catbrainCommand);
+        }
+    }
+
+    private void registerGlobalCommands(CommandData catbrainCommand) {
         jda.updateCommands()
                 .addCommands(catbrainCommand)
                 .queue(
-                        success -> log.info("Slash commands registered successfully"),
-                        error -> log.error("Failed to register slash commands", error)
+                        success -> log.info("Slash commands registered successfully (global)"),
+                        error -> log.error("Failed to register global slash commands", error)
                 );
-
-        log.info("Command registration initiated (may take up to 1 hour to propagate globally)");
+        log.info("Command registration initiated (global - may take up to 1 hour to propagate)");
     }
 
     private void registerEventListeners() {

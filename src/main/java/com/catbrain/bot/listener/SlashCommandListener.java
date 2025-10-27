@@ -23,7 +23,7 @@ public class SlashCommandListener extends ListenerAdapter {
     private final SchedulerService schedulerService;
     private final String channelId;
     @Nullable
-    private final String guildId;  // Optional: restrict to specific guild
+    private final String guildId;
 
     @Override
     public void onSlashCommandInteraction(@NotNull SlashCommandInteractionEvent event) {

@@ -7,10 +7,14 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.Random;
-import java.util.concurrent.*;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 
 @Slf4j
 public class SchedulerService {
@@ -19,41 +23,11 @@ public class SchedulerService {
 
     private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(2);
     private final Random random = new SecureRandom();
-    private final List<ScheduledFuture<?>> scheduledPosts = new CopyOnWriteArrayList<>();
-    private final List<LocalDateTime> scheduledTimes = new CopyOnWriteArrayList<>();
-    private volatile ScheduledFuture<?> midnightTask;
-
-
-    private void validateSchedulingParameters(int postCount, int startHour, int endHour) {
-        if (postCount <= 0) {
-            throw new IllegalArgumentException(
-                    "postCount must be greater than 0, got: " + postCount
-            );
-        }
-
-        if (startHour < 0 || startHour > 23) {
-            throw new IllegalArgumentException(
-                    "startHour must be between 0 and 23, got: " + startHour
-            );
-        }
-
-        if (endHour < 0 || endHour > 23) {
-            throw new IllegalArgumentException(
-                    "endHour must be between 0 and 23, got: " + endHour
-            );
-        }
-
-        if (startHour >= endHour) {
-            throw new IllegalArgumentException(
-                    "startHour must be less than endHour, got startHour: " +
-                            startHour + ", endHour: " + endHour
-            );
-        }
-    }
+    private final List<ScheduledFuture<?>> scheduledPosts = new ArrayList<>();
+    private final List<LocalDateTime> scheduledTimes = new ArrayList<>();
+    private ScheduledFuture<?> midnightTask;
 
     public void scheduleDailyPosts(int postCount, int startHour, int endHour, Runnable postAction) {
-        validateSchedulingParameters(postCount, startHour, endHour);
-
         var now = LocalDateTime.now();
 
         var times = generateRandomTimesWithSpacing(postCount, startHour, endHour)
@@ -126,15 +100,15 @@ public class SchedulerService {
         var now = LocalDateTime.now();
 
         var nextMidnight = now.toLocalDate().plusDays(1).atStartOfDay();
-        var delayMinutes = ChronoUnit.MINUTES.between(now, nextMidnight);
+        var delaySeconds = ChronoUnit.SECONDS.between(now, nextMidnight);
 
-        if (delayMinutes <= 0) {
-            log.warn("Calculated delay to midnight was {} minutes, using 1440 (24 hours)", delayMinutes);
-            delayMinutes = 1440;
+        if (delaySeconds <= 0) {
+            log.warn("Calculated delay to midnight was {} seconds, using 86400 (24 hours)", delaySeconds);
+            delaySeconds = 86400;
         }
 
-        log.info("Next schedule refresh at midnight in {} minutes ({} hours)",
-                delayMinutes, delayMinutes / 60);
+        log.info("Next schedule refresh at midnight in {} seconds ({} hours)",
+                delaySeconds, delaySeconds / 3600.0);
 
         midnightTask = scheduler.schedule(() -> {
             try {
@@ -144,7 +118,7 @@ public class SchedulerService {
             } catch (Exception e) {
                 log.error("Error during midnight rescheduling", e);
             }
-        }, delayMinutes, TimeUnit.MINUTES);
+        }, delaySeconds, TimeUnit.SECONDS);
     }
 
     private void clearPreviousDayTasks() {
@@ -169,8 +143,6 @@ public class SchedulerService {
     }
 
     private List<LocalDateTime> generateRandomTimesWithSpacing(int count, int startHour, int endHour) {
-        validateSchedulingParameters(count, startHour, endHour);
-
         var now = LocalDateTime.now();
         var currentHour = now.getHour();
 
@@ -202,7 +174,7 @@ public class SchedulerService {
                     count, MIN_SPACING_MINUTES);
         }
 
-        List<LocalDateTime> times = new CopyOnWriteArrayList<>();
+        List<LocalDateTime> times = new ArrayList<>();
 
         for (int i = 0; i < count; i++) {
             var segmentStart = startMinute + (i * segmentSize);

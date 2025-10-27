@@ -11,7 +11,6 @@ import java.time.Instant;
 @UtilityClass
 public class StatusFormatter {
 
-    // Color scheme for different braincell statuses
     private static final Color COLOR_ONLINE = new Color(67, 181, 129);
     private static final Color COLOR_OFFLINE = new Color(240, 71, 71);
     private static final Color COLOR_BUFFERING = new Color(250, 166, 26);
@@ -58,7 +57,7 @@ public class StatusFormatter {
     }
 
     private static Color getColorForStatus(String status) {
-        return switch (status.toLowerCase()) {
+        return switch (status.toLowerCase(java.util.Locale.ROOT)) {
             case "online" -> COLOR_ONLINE;
             case "offline" -> COLOR_OFFLINE;
             case "buffering" -> COLOR_BUFFERING;
