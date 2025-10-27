@@ -94,7 +94,7 @@ public class SlashCommandListener extends ListenerAdapter {
                         "Displays recent updates and changes to the bot.",
                         false
                 )
-                .setFooter("Cat Brain Bot v0.1.5")
+                .setFooter("Cat Brain Bot v0.2.0")
                 .setTimestamp(Instant.now())
                 .build();
 
@@ -125,7 +125,7 @@ public class SlashCommandListener extends ListenerAdapter {
                                 """,
                         false
                 )
-                .setFooter("Cat Brain Bot v0.1.5")
+                .setFooter("Cat Brain Bot v0.2.0")
                 .setTimestamp(Instant.now())
                 .build();
 
