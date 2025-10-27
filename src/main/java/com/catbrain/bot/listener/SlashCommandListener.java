@@ -43,7 +43,6 @@ public class SlashCommandListener extends ListenerAdapter {
             return;
         }
 
-        // Check if command is in the correct channel
         if (!event.getChannel().getId().equals(channelId)) {
             event.reply("❌ This command can only be used in the designated Cat Brain channel.")
                     .setEphemeral(true)
