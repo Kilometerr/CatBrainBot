@@ -62,7 +62,9 @@ public record BotConfig(
 
     private static String getProperty(Properties properties, String propertyKey, String envKey) {
         return Optional.ofNullable(System.getenv(envKey))
-                .or(() -> Optional.ofNullable(properties.getProperty(propertyKey)))
+                .map(String::trim)
+                .or(() -> Optional.ofNullable(properties.getProperty(propertyKey))
+                        .map(String::trim))
                 .filter(s -> !s.isBlank())
                 .orElseThrow(() -> new IllegalStateException(
                         "Missing required property: %s (or env var: %s)".formatted(propertyKey, envKey)
@@ -71,20 +73,24 @@ public record BotConfig(
 
     private static String getOptionalProperty(Properties properties) {
         return Optional.ofNullable(System.getenv("GUILD_ID"))
-                .or(() -> Optional.ofNullable(properties.getProperty("guild.id")))
+                .map(String::trim)
+                .or(() -> Optional.ofNullable(properties.getProperty("guild.id"))
+                        .map(String::trim))
                 .filter(s -> !s.isBlank())
                 .orElse(null);
     }
 
     private static int getIntProperty(Properties properties, String key, String envKey) {
         var value = Optional.ofNullable(System.getenv(envKey))
-                .or(() -> Optional.ofNullable(properties.getProperty(key)))
+                .map(String::trim)
+                .or(() -> Optional.ofNullable(properties.getProperty(key))
+                        .map(String::trim))
                 .filter(s -> !s.isBlank())
                 .orElseThrow(() -> new IllegalStateException(
                         "Missing required property: %s (or env var: %s)".formatted(key, envKey)));
 
         try {
-            return Integer.parseInt(value.trim());
+            return Integer.parseInt(value);
         } catch (NumberFormatException e) {
             throw new IllegalStateException("Invalid integer value for %s: %s".formatted(key, value), e);
         }
