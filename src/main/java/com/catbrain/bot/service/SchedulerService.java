@@ -7,14 +7,10 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.Random;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.*;
 
 @Slf4j
 public class SchedulerService {
@@ -23,11 +19,41 @@ public class SchedulerService {
 
     private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(2);
     private final Random random = new SecureRandom();
-    private final List<ScheduledFuture<?>> scheduledPosts = new ArrayList<>();
-    private final List<LocalDateTime> scheduledTimes = new ArrayList<>();
-    private ScheduledFuture<?> midnightTask;
+    private final List<ScheduledFuture<?>> scheduledPosts = new CopyOnWriteArrayList<>();
+    private final List<LocalDateTime> scheduledTimes = new CopyOnWriteArrayList<>();
+    private volatile ScheduledFuture<?> midnightTask;
+
+
+    private void validateSchedulingParameters(int postCount, int startHour, int endHour) {
+        if (postCount <= 0) {
+            throw new IllegalArgumentException(
+                    "postCount must be greater than 0, got: " + postCount
+            );
+        }
+
+        if (startHour < 0 || startHour > 23) {
+            throw new IllegalArgumentException(
+                    "startHour must be between 0 and 23, got: " + startHour
+            );
+        }
+
+        if (endHour < 0 || endHour > 23) {
+            throw new IllegalArgumentException(
+                    "endHour must be between 0 and 23, got: " + endHour
+            );
+        }
+
+        if (startHour >= endHour) {
+            throw new IllegalArgumentException(
+                    "startHour must be less than endHour, got startHour: " +
+                            startHour + ", endHour: " + endHour
+            );
+        }
+    }
 
     public void scheduleDailyPosts(int postCount, int startHour, int endHour, Runnable postAction) {
+        validateSchedulingParameters(postCount, startHour, endHour);
+
         var now = LocalDateTime.now();
 
         var times = generateRandomTimesWithSpacing(postCount, startHour, endHour)
@@ -143,6 +169,8 @@ public class SchedulerService {
     }
 
     private List<LocalDateTime> generateRandomTimesWithSpacing(int count, int startHour, int endHour) {
+        validateSchedulingParameters(count, startHour, endHour);
+
         var now = LocalDateTime.now();
         var currentHour = now.getHour();
 
@@ -174,7 +202,7 @@ public class SchedulerService {
                     count, MIN_SPACING_MINUTES);
         }
 
-        List<LocalDateTime> times = new ArrayList<>();
+        List<LocalDateTime> times = new CopyOnWriteArrayList<>();
 
         for (int i = 0; i < count; i++) {
             var segmentStart = startMinute + (i * segmentSize);
