@@ -38,7 +38,10 @@ public class SchedulerService {
         scheduledTimes.clear();
         scheduledTimes.addAll(times);
 
-        log.info("Scheduled {} posts for today:", postCount);
+        var currentHour = now.getHour();
+        var dayLabel = (currentHour >= endHour) ? "tomorrow" : "today";
+
+        log.info("Scheduled {} posts for {}:", postCount, dayLabel);
         times.forEach(time -> log.info("  - {}", time.format(TIME_FORMATTER)));
 
         int scheduled = 0;
@@ -65,20 +68,10 @@ public class SchedulerService {
 
     private void schedulePost(LocalDateTime scheduledTime, Runnable postAction) {
         var now = LocalDateTime.now();
-        var delayMinutes = ChronoUnit.MINUTES.between(now, scheduledTime);
+        var delaySeconds = Math.max(1, ChronoUnit.SECONDS.between(now, scheduledTime));
 
-        if (delayMinutes < 0) {
-            log.warn("Negative delay calculated for {}: {} minutes",
-                    scheduledTime.format(TIME_FORMATTER), delayMinutes);
-            return;
-        }
-
-        if (delayMinutes == 0) {
-            delayMinutes = 1;
-        }
-
-        log.debug("Scheduling post for {} in {} minutes",
-                scheduledTime.format(TIME_FORMATTER), delayMinutes);
+        log.debug("Scheduling post for {} in {} seconds",
+                scheduledTime.format(TIME_FORMATTER), delaySeconds);
 
         Runnable safePostAction = () -> {
             try {
@@ -90,7 +83,7 @@ public class SchedulerService {
             }
         };
 
-        var future = scheduler.schedule(safePostAction, delayMinutes, TimeUnit.MINUTES);
+        var future = scheduler.schedule(safePostAction, delaySeconds, TimeUnit.SECONDS);
         scheduledPosts.add(future);
 
         log.debug("Post successfully scheduled for {}", scheduledTime.format(TIME_FORMATTER));
@@ -167,34 +160,39 @@ public class SchedulerService {
         var windowMinutes = (endHour - startHour) * 60;
         var startMinute = startHour * 60;
 
-        var segmentSize = windowMinutes / count;
-
-        if (segmentSize < MIN_SPACING_MINUTES) {
-            log.warn("Window too small for {} posts with {} minute spacing. Posts will be packed tighter.",
-                    count, MIN_SPACING_MINUTES);
+        var minSpan = Math.max(MIN_SPACING_MINUTES, 1);
+        if (count > 0 && count * minSpan > windowMinutes) {
+            log.warn("Requested {} posts do not fit {}-minute spacing in window ({}m). Will compress spacing.",
+                    count, minSpan, windowMinutes);
         }
 
-        List<LocalDateTime> times = new ArrayList<>();
+        List<LocalDateTime> times = new ArrayList<>(count);
 
-        for (int i = 0; i < count; i++) {
-            var segmentStart = startMinute + (i * segmentSize);
-            var segmentEnd = Math.min(segmentStart + segmentSize, startMinute + windowMinutes);
+        double baseStep = windowMinutes / (double) (count + 1);
+        int halfJitter = Math.max(0, (int)Math.floor(baseStep / 2) - minSpan/2);
 
-            if (i > 0) {
-                segmentStart = Math.max(segmentStart, startMinute + (i * MIN_SPACING_MINUTES));
+        for (int i = 1; i <= count; i++) {
+            int ideal = startMinute + (int)Math.round(i * baseStep);
+            int jitter = halfJitter > 0 ? random.nextInt(halfJitter * 2 + 1) - halfJitter : 0;
+            int minute = Math.min(Math.max(ideal + jitter, startMinute), startMinute + windowMinutes - 1);
+            times.add(baseDate.withHour(minute / 60).withMinute(minute % 60).withSecond(0).withNano(0));
+        }
+
+        times.sort(LocalDateTime::compareTo);
+        for (int i = 1; i < times.size(); i++) {
+            var prev = times.get(i - 1);
+            var curr = times.get(i);
+            long gap = ChronoUnit.MINUTES.between(prev, curr);
+            if (gap < minSpan) {
+                times.set(i, prev.plusMinutes(minSpan));
             }
+        }
 
-            var availableRange = Math.max(1, segmentEnd - segmentStart);
-            var randomOffset = random.nextInt(availableRange);
-            var minute = Math.min(segmentStart + randomOffset, startMinute + windowMinutes - 1);
-
-            var scheduledTime = baseDate
-                    .withHour(minute / 60)
-                    .withMinute(minute % 60)
-                    .withSecond(0)
-                    .withNano(0);
-
-            times.add(scheduledTime);
+        var windowEnd = baseDate.plusMinutes(startMinute + windowMinutes - 1);
+        for (int i = 0; i < times.size(); i++) {
+            if (times.get(i).isAfter(windowEnd)) {
+                times.set(i, windowEnd);
+            }
         }
 
         return times;

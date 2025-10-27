@@ -28,7 +28,7 @@ public class CatBrainBot {
         log.info("Cat Brain Bot starting...");
 
         jda = JDABuilder.createDefault(config.botToken())
-                .enableIntents(GatewayIntent.GUILD_MESSAGES, GatewayIntent.MESSAGE_CONTENT)
+                .enableIntents(GatewayIntent.GUILD_MESSAGES)
                 .build()
                 .awaitReady();
 

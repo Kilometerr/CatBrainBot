@@ -25,28 +25,26 @@ public class SlashCommandListener extends ListenerAdapter {
     @Nullable
     private final String guildId;
 
+    private void replyEphemeral(SlashCommandInteractionEvent event, String msg) {
+        event.reply(msg).setEphemeral(true).queue();
+    }
+
     @Override
     public void onSlashCommandInteraction(@NotNull SlashCommandInteractionEvent event) {
         if (!event.isFromGuild()) {
-            event.reply("❌ This bot only works in servers, not in DMs.")
-                    .setEphemeral(true)
-                    .queue();
+            replyEphemeral(event,"❌ This bot only works in servers, not in DMs.");
             return;
         }
 
         if (guildId != null && !Objects.requireNonNull(event.getGuild()).getId().equals(guildId)) {
             log.warn("Command attempted from unauthorized guild: {} (expected: {})",
                     event.getGuild().getId(), guildId);
-            event.reply("❌ This bot is not authorized to run in this server.")
-                    .setEphemeral(true)
-                    .queue();
+            replyEphemeral(event,"❌ This bot is not authorized to run in this server.");
             return;
         }
 
         if (!event.getChannel().getId().equals(channelId)) {
-            event.reply("❌ This command can only be used in the designated Cat Brain channel.")
-                    .setEphemeral(true)
-                    .queue();
+            replyEphemeral(event,"❌ This command can only be used in the designated Cat Brain channel.");
             return;
         }
 
@@ -56,9 +54,7 @@ public class SlashCommandListener extends ListenerAdapter {
 
         String subcommand = event.getSubcommandName();
         if (subcommand == null) {
-            event.reply("❌ Invalid command usage.")
-                    .setEphemeral(true)
-                    .queue();
+            replyEphemeral(event,"❌ Invalid command usage.");
             return;
         }
 
@@ -76,9 +72,7 @@ public class SlashCommandListener extends ListenerAdapter {
             }
         } catch (Exception e) {
             log.error("Error handling slash command: {}", subcommand, e);
-            event.reply("❌ An error occurred while processing your command.")
-                    .setEphemeral(true)
-                    .queue();
+            replyEphemeral(event,"❌ An error occurred while processing your command.");
         }
     }
 

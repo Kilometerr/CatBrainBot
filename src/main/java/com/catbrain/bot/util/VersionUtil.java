@@ -9,8 +9,8 @@ import java.util.jar.Manifest;
 @Slf4j
 @UtilityClass
 public class VersionUtil {
-    private static final String DEFAULT_VERSION = "0.2.0-dev";
-    private static String cachedVersion;
+    private static final String DEFAULT_VERSION = "dev";
+    private static volatile String cachedVersion;
 
     public static String getVersion() {
         if (cachedVersion != null) {
