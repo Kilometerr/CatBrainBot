@@ -163,7 +163,7 @@ public class SchedulerService {
         var minSpan = Math.max(MIN_SPACING_MINUTES, 1);
 
         long requiredMinutes = (count - 1) * (long) minSpan;
-        if (count > 0 && requiredMinutes >= windowMinutes) {
+        if (count > 0 && requiredMinutes > windowMinutes) {
             log.error("Cannot fit {} posts with {}-minute spacing in window of {}m (requires {}m minimum)",
                     count, minSpan, windowMinutes, requiredMinutes);
             throw new IllegalArgumentException(String.format(
