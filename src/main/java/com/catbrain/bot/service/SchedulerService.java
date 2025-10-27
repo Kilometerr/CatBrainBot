@@ -195,6 +195,21 @@ public class SchedulerService {
             }
         }
 
+        for (int i = times.size() - 1; i > 0; i--) {
+            var curr = times.get(i);
+            var prev = times.get(i - 1);
+            long gap = ChronoUnit.MINUTES.between(prev, curr);
+            if (gap < minSpan) {
+                times.set(i - 1, curr.minusMinutes(minSpan));
+            }
+        }
+        // Ensure we didn't push before the window start
+        var windowStart = baseDate.plusMinutes(startMinute);
+        if (!times.isEmpty() && times.get(0).isBefore(windowStart)) {
+            long shift = ChronoUnit.MINUTES.between(times.get(0), windowStart);
+            times.replaceAll(localDateTime -> localDateTime.plusMinutes(shift));
+        }
+
         return times;
     }
 

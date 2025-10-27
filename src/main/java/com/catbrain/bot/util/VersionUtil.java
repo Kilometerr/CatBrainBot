@@ -17,6 +17,16 @@ public class VersionUtil {
             return cachedVersion;
         }
 
+        var pkg = VersionUtil.class.getPackage();
+        if (pkg != null) {
+            var pkgVersion = pkg.getImplementationVersion();
+            if (pkgVersion != null && !pkgVersion.isBlank()) {
+                cachedVersion = pkgVersion;
+                log.debug("Version loaded from package: {}", cachedVersion);
+                return cachedVersion;
+            }
+        }
+
         try {
             var resources = VersionUtil.class.getClassLoader().getResources("META-INF/MANIFEST.MF");
             while (resources.hasMoreElements()) {
@@ -25,11 +35,14 @@ public class VersionUtil {
                     var manifest = new Manifest(stream);
                     var attrs = manifest.getMainAttributes();
 
-                    var implVersion = attrs.getValue("Implementation-Version");
-                    if (implVersion != null && !implVersion.isBlank()) {
-                        cachedVersion = implVersion;
-                        log.debug("Version loaded from manifest: {}", cachedVersion);
-                        return cachedVersion;
+                    var implTitle = attrs.getValue("Implementation-Title");
+                    if ("Cat Brain Discord Bot".equals(implTitle)) {
+                        var implVersion = attrs.getValue("Implementation-Version");
+                        if (implVersion != null && !implVersion.isBlank()) {
+                            cachedVersion = implVersion;
+                            log.debug("Version loaded from manifest (filtered by title): {}", cachedVersion);
+                            return cachedVersion;
+                        }
                     }
                 } catch (IOException e) {
                     log.debug("Could not read manifest from {}", url, e);
