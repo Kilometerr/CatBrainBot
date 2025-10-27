@@ -60,7 +60,12 @@ public class CatBrainBot {
     }
 
     private void registerEventListeners() {
-        var slashCommandListener = new SlashCommandListener(statusService, schedulerService, config.channelId());
+        var slashCommandListener = new SlashCommandListener(
+                statusService,
+                schedulerService,
+                config.channelId(),
+                config.guildId()
+        );
         jda.addEventListener(slashCommandListener);
         log.info("Event listeners registered");
     }

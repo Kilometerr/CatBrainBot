@@ -3,15 +3,18 @@ package com.catbrain.bot.listener;
 import com.catbrain.bot.service.SchedulerService;
 import com.catbrain.bot.service.StatusService;
 import com.catbrain.bot.util.StatusFormatter;
+import com.catbrain.bot.util.VersionUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import net.dv8tion.jda.api.EmbedBuilder;
 import net.dv8tion.jda.api.events.interaction.command.SlashCommandInteractionEvent;
 import net.dv8tion.jda.api.hooks.ListenerAdapter;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 
 import java.awt.*;
 import java.time.Instant;
+import java.util.Objects;
 
 @Slf4j
 @RequiredArgsConstructor
@@ -19,9 +22,28 @@ public class SlashCommandListener extends ListenerAdapter {
     private final StatusService statusService;
     private final SchedulerService schedulerService;
     private final String channelId;
+    @Nullable
+    private final String guildId;  // Optional: restrict to specific guild
 
     @Override
     public void onSlashCommandInteraction(@NotNull SlashCommandInteractionEvent event) {
+        if (!event.isFromGuild()) {
+            event.reply("❌ This bot only works in servers, not in DMs.")
+                    .setEphemeral(true)
+                    .queue();
+            return;
+        }
+
+        if (guildId != null && !Objects.requireNonNull(event.getGuild()).getId().equals(guildId)) {
+            log.warn("Command attempted from unauthorized guild: {} (expected: {})",
+                    event.getGuild().getId(), guildId);
+            event.reply("❌ This bot is not authorized to run in this server.")
+                    .setEphemeral(true)
+                    .queue();
+            return;
+        }
+
+        // Check if command is in the correct channel
         if (!event.getChannel().getId().equals(channelId)) {
             event.reply("❌ This command can only be used in the designated Cat Brain channel.")
                     .setEphemeral(true)
@@ -41,7 +63,8 @@ public class SlashCommandListener extends ListenerAdapter {
             return;
         }
 
-        log.info("Processing /catbrain {} command from user: {}", subcommand, event.getUser().getAsTag());
+        log.info("Processing /catbrain {} command from user: {} in guild: {}",
+                subcommand, event.getUser().getAsTag(), Objects.requireNonNull(event.getGuild()).getName());
 
         try {
             switch (subcommand) {
@@ -93,7 +116,7 @@ public class SlashCommandListener extends ListenerAdapter {
                         "Displays recent updates and changes to the bot.",
                         false
                 )
-                .setFooter("Cat Brain Bot v0.2.0")
+                .setFooter(VersionUtil.getFormattedVersion())
                 .setTimestamp(Instant.now())
                 .build();
 
@@ -124,7 +147,7 @@ public class SlashCommandListener extends ListenerAdapter {
                                 """,
                         false
                 )
-                .setFooter("Cat Brain Bot v0.2.0")
+                .setFooter(VersionUtil.getFormattedVersion())
                 .setTimestamp(Instant.now())
                 .build();
 
