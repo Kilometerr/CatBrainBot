@@ -36,9 +36,9 @@ public record BotConfig(
         var botToken = getProperty(properties, "bot.token", "BOT_TOKEN");
         var channelId = getProperty(properties, "channel.id", "CHANNEL_ID");
         var guildId = getOptionalProperty(properties);
-        var dailyPosts = getIntProperty(properties, "daily.posts");
-        var startHour = getIntProperty(properties, "start.hour");
-        var endHour = getIntProperty(properties, "end.hour");
+        var dailyPosts = getIntProperty(properties, "daily.posts", "DAILY_POSTS");
+        var startHour = getIntProperty(properties, "start.hour", "START_HOUR");
+        var endHour = getIntProperty(properties, "end.hour", "END_HOUR");
 
         if (guildId != null) {
             log.info("Configuration loaded successfully (guild-restricted mode).");
@@ -76,10 +76,12 @@ public record BotConfig(
                 .orElse(null);
     }
 
-    private static int getIntProperty(Properties properties, String key) {
-        var value = Optional.ofNullable(properties.getProperty(key))
+    private static int getIntProperty(Properties properties, String key, String envKey) {
+        var value = Optional.ofNullable(System.getenv(envKey))
+                .or(() -> Optional.ofNullable(properties.getProperty(key)))
                 .filter(s -> !s.isBlank())
-                .orElseThrow(() -> new IllegalStateException("Missing required property: " + key));
+                .orElseThrow(() -> new IllegalStateException(
+                        "Missing required property: %s (or env var: %s)".formatted(key, envKey)));
 
         try {
             return Integer.parseInt(value.trim());
