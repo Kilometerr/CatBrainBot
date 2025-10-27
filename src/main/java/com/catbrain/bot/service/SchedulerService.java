@@ -203,11 +203,23 @@ public class SchedulerService {
                 times.set(i - 1, curr.minusMinutes(minSpan));
             }
         }
-        // Ensure we didn't push before the window start
         var windowStart = baseDate.plusMinutes(startMinute);
         if (!times.isEmpty() && times.get(0).isBefore(windowStart)) {
             long shift = ChronoUnit.MINUTES.between(times.get(0), windowStart);
-            times.replaceAll(localDateTime -> localDateTime.plusMinutes(shift));
+
+            for (int i = 0; i < times.size(); i++) {
+                if (times.get(i).isBefore(windowStart)) {
+                    times.set(i, times.get(i).plusMinutes(shift));
+                } else {
+                    break;
+                }
+            }
+
+            for (int i = 0; i < times.size(); i++) {
+                if (times.get(i).isAfter(windowEnd)) {
+                    times.set(i, windowEnd);
+                }
+            }
         }
 
         return times;
