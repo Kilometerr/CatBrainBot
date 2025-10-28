@@ -73,7 +73,7 @@ public class ChangelogManager {
         }
 
         return changelogData.getVersions().stream()
-                .filter(entry -> entry.getVersion().equals(version))
+                .filter(entry -> entry.getVersion().equalsIgnoreCase(version))
                 .findFirst();
     }
 
