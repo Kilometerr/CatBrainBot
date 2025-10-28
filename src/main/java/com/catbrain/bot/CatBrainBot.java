@@ -2,6 +2,7 @@ package com.catbrain.bot;
 
 import com.catbrain.bot.config.BotConfig;
 import com.catbrain.bot.listener.SlashCommandListener;
+import com.catbrain.bot.service.ChangelogManager;
 import com.catbrain.bot.service.SchedulerService;
 import com.catbrain.bot.service.StatusService;
 import com.catbrain.bot.util.StatusFormatter;
@@ -21,11 +22,19 @@ public class CatBrainBot {
     private final BotConfig config;
     private final StatusService statusService;
     private final SchedulerService schedulerService;
+    private final ChangelogManager changelogManager;
 
     private JDA jda;
 
     public void start() throws InterruptedException {
         log.info("Cat Brain Bot starting...");
+
+        try {
+            changelogManager.load();
+            log.info("Changelog loaded successfully");
+        } catch (Exception e) {
+            log.error("Failed to load changelog - bot will continue but changelog command may not work", e);
+        }
 
         jda = JDABuilder.createDefault(config.botToken())
                 .enableIntents(GatewayIntent.GUILD_MESSAGES)
@@ -48,6 +57,11 @@ public class CatBrainBot {
                         new SubcommandData("check", "Check the current cat brain status"),
                         new SubcommandData("help", "Show help information and available commands"),
                         new SubcommandData("changelog", "View recent changes and updates")
+                                .addOption(net.dv8tion.jda.api.interactions.commands.OptionType.STRING,
+                                        "version",
+                                        "Specific version to view (e.g., 0.2.0). Leave empty for latest.",
+                                        false,
+                                        true)
                 );
 
         if (config.guildId() != null) {
@@ -83,6 +97,7 @@ public class CatBrainBot {
         var slashCommandListener = new SlashCommandListener(
                 statusService,
                 schedulerService,
+                changelogManager,
                 config.channelId(),
                 config.guildId()
         );
@@ -147,7 +162,12 @@ public class CatBrainBot {
     public static void main(@NotNull String[] args) {
         try {
             var config = BotConfig.load();
-            var bot = new CatBrainBot(config, new StatusService(), new SchedulerService());
+            var bot = new CatBrainBot(
+                    config,
+                    new StatusService(),
+                    new SchedulerService(),
+                    new ChangelogManager()
+            );
             bot.start();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();

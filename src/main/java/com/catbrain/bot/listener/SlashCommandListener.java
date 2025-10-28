@@ -1,5 +1,6 @@
 package com.catbrain.bot.listener;
 
+import com.catbrain.bot.service.ChangelogManager;
 import com.catbrain.bot.service.SchedulerService;
 import com.catbrain.bot.service.StatusService;
 import com.catbrain.bot.util.StatusFormatter;
@@ -7,8 +8,11 @@ import com.catbrain.bot.util.VersionUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import net.dv8tion.jda.api.EmbedBuilder;
+import net.dv8tion.jda.api.entities.MessageEmbed;
+import net.dv8tion.jda.api.events.interaction.command.CommandAutoCompleteInteractionEvent;
 import net.dv8tion.jda.api.events.interaction.command.SlashCommandInteractionEvent;
 import net.dv8tion.jda.api.hooks.ListenerAdapter;
+import net.dv8tion.jda.api.interactions.commands.Command;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -21,6 +25,7 @@ import java.util.Objects;
 public class SlashCommandListener extends ListenerAdapter {
     private final StatusService statusService;
     private final SchedulerService schedulerService;
+    private final ChangelogManager changelogManager;
     private final String channelId;
     @Nullable
     private final String guildId;
@@ -76,6 +81,41 @@ public class SlashCommandListener extends ListenerAdapter {
         }
     }
 
+    @Override
+    public void onCommandAutoCompleteInteraction(@NotNull CommandAutoCompleteInteractionEvent event) {
+        if (!event.getName().equals("catbrain") ||
+                !"changelog".equals(event.getSubcommandName()) ||
+                !"version".equals(event.getFocusedOption().getName())) {
+            return;
+        }
+
+        try {
+            String userInput = event.getFocusedOption().getValue().toLowerCase();
+
+            var versions = changelogManager.getAllVersions();
+
+            var choices = versions.stream()
+                    .map(entry -> {
+                        var version = entry.getVersion();
+                        var description = String.format("Phase %d - %s",
+                                entry.getPhase(),
+                                entry.getDate());
+                        return new Command.Choice(version + " (" + description + ")", version);
+                    })
+                    .filter(choice -> userInput.isEmpty() ||
+                            choice.getName().toLowerCase().contains(userInput))
+                    .limit(25)  // Discord limit
+                    .toList();
+
+            event.replyChoices(choices).queue();
+            log.debug("Provided {} version choices for autocomplete", choices.size());
+
+        } catch (Exception e) {
+            log.error("Error handling autocomplete for changelog versions", e);
+            event.replyChoices(java.util.List.of()).queue();
+        }
+    }
+
     private void handleCheckCommand(SlashCommandInteractionEvent event) {
         event.deferReply(true).queue();
 
@@ -105,8 +145,8 @@ public class SlashCommandListener extends ListenerAdapter {
                         false
                 )
                 .addField(
-                        " `/catbrain changelog`",
-                        "Displays recent updates and changes to the bot.",
+                        " `/catbrain changelog [version]`",
+                        "Displays recent updates and changes to the bot. Optionally specify a version (e.g., `0.1.0`) to view that specific release.",
                         false
                 )
                 .setFooter(VersionUtil.getFormattedVersion())
@@ -118,33 +158,36 @@ public class SlashCommandListener extends ListenerAdapter {
     }
 
     private void handleChangelogCommand(SlashCommandInteractionEvent event) {
-        var embed = new EmbedBuilder()
-                .setTitle("Cat Brain Bot - Changelog")
-                .setColor(new Color(67, 181, 129))
-                .addField(
-                        "Last Stable Update: Version 0.2.0",
-                        """
-                                Changes:
-                                - Automatic re-scheduling at midnight
-                                - Totally needed multithreading
-                                - Basic slash commands
-                                - Smart Thought ETA actually counts down
-                                - Dynamic box formatting
-                                - Time collision prevention
-                                """,
-                        false
-                )
-                .addField(
-                        "Current update (experimental): -",
-                        """
-                                """,
-                        false
-                )
-                .setFooter(VersionUtil.getFormattedVersion())
-                .setTimestamp(Instant.now())
-                .build();
+        event.deferReply(true).queue();
 
-        event.replyEmbeds(embed).setEphemeral(true).queue();
-        log.info("Changelog displayed to user: {}", event.getUser().getAsTag());
+        try {
+            var versionOption = event.getOption("version");
+            MessageEmbed embed;
+
+            if (versionOption != null) {
+                String requestedVersion = versionOption.getAsString().trim();
+                log.info("User {} requested changelog for version: {}",
+                        event.getUser().getAsTag(), requestedVersion);
+                embed = changelogManager.formatVersion(requestedVersion);
+            } else {
+                embed = changelogManager.formatLatestVersion();
+            }
+
+            event.getHook().sendMessageEmbeds(embed).queue(
+                    success -> log.info("Changelog displayed to user: {}", event.getUser().getAsTag()),
+                    error -> log.error("Failed to display changelog", error)
+            );
+        } catch (Exception e) {
+            log.error("Error displaying changelog", e);
+
+            var errorEmbed = new EmbedBuilder()
+                    .setTitle("❌ Changelog Error")
+                    .setDescription("Failed to load changelog. Please contact the bot administrator.")
+                    .setColor(new Color(240, 71, 71))
+                    .setTimestamp(Instant.now())
+                    .build();
+
+            event.getHook().sendMessageEmbeds(errorEmbed).queue();
+        }
     }
 }
