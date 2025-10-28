@@ -7,7 +7,7 @@
 
     <groupId>com.catbrain</groupId>
     <artifactId>cat-brain-bot</artifactId>
-    <version>0.2.1</version>
+    <version>0.2.2</version>
     <packaging>jar</packaging>
 
     <name>Cat Brain Discord Bot</name>
@@ -18,22 +18,18 @@
         <maven.compiler.target>17</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <jda.version>6.1.0</jda.version>
-        <slf4j.version>2.0.9</slf4j.version>
     </properties>
 
     <dependencies>
-        <!-- JDA (Java Discord API) -->
         <dependency>
             <groupId>net.dv8tion</groupId>
             <artifactId>JDA</artifactId>
             <version>${jda.version}</version>
         </dependency>
-
-        <!-- SLF4J Simple Logger -->
         <dependency>
-            <groupId>org.slf4j</groupId>
-            <artifactId>slf4j-simple</artifactId>
-            <version>${slf4j.version}</version>
+            <groupId>ch.qos.logback</groupId>
+            <artifactId>logback-classic</artifactId>
+            <version>1.5.20</version>
         </dependency>
         <dependency>
             <groupId>org.projectlombok</groupId>
