@@ -107,7 +107,8 @@ public class CatBrainBot {
 
     private void scheduleDailyPosts() {
         schedulerService.scheduleDailyPosts(
-                config.dailyPosts(),
+                config.minDailyPosts(),
+                config.maxDailyPosts(),
                 config.startHour(),
                 config.endHour(),
                 this::postStatusUpdate
