@@ -27,8 +27,43 @@ public class SchedulerService {
     private final List<LocalDateTime> scheduledTimes = new ArrayList<>();
     private ScheduledFuture<?> midnightTask;
 
-    public void scheduleDailyPosts(int postCount, int startHour, int endHour, Runnable postAction) {
+    private int minDailyPosts;
+    private int maxDailyPosts;
+
+    public void scheduleDailyPosts(int minPosts, int maxPosts, int startHour, int endHour, Runnable postAction) {
+        this.minDailyPosts = minPosts;
+        this.maxDailyPosts = maxPosts;
+
+        int postCount = generateRandomPostCount(minPosts, maxPosts);
+
+        schedulePostsWithCount(postCount, startHour, endHour, postAction);
+        scheduleMidnightReschedule(startHour, endHour, postAction);
+    }
+
+    private int generateRandomPostCount(int min, int max) {
+        if (min == max) {
+            return min;
+        }
+        int count = min + random.nextInt(max - min + 1);
+
+        log.info("🎲 Cat brain intensity for today: {} moments scheduled", count);
+        log.debug("Random post count generated: {} (range: {}-{})", count, min, max);
+
+        return count;
+    }
+
+    private void schedulePostsWithCount(int postCount, int startHour, int endHour, Runnable postAction) {
         var now = LocalDateTime.now();
+
+        int windowMinutes = (endHour - startHour) * 60;
+        int maxPossiblePosts = windowMinutes / MIN_SPACING_MINUTES;
+
+        if (postCount > maxPossiblePosts) {
+            log.warn("⚠️ Requested {} posts cannot fit in {}h window with {}-minute spacing " +
+                            "(max: {}). Capping at {} posts.",
+                    postCount, (endHour - startHour), MIN_SPACING_MINUTES, maxPossiblePosts, maxPossiblePosts);
+            postCount = maxPossiblePosts;
+        }
 
         var times = generateRandomTimesWithSpacing(postCount, startHour, endHour)
                 .stream()
@@ -41,7 +76,7 @@ public class SchedulerService {
         var currentHour = now.getHour();
         var dayLabel = (currentHour >= endHour) ? "tomorrow" : "today";
 
-        log.info("Scheduled {} posts for {}:", postCount, dayLabel);
+        log.info("📅 Scheduled {} posts for {}:", postCount, dayLabel);
         times.forEach(time -> log.info("  - {}", time.format(TIME_FORMATTER)));
 
         int scheduled = 0;
@@ -54,9 +89,7 @@ public class SchedulerService {
             }
         }
 
-        log.info("Scheduled {} posts (skipped {} past times)", scheduled, postCount - scheduled);
-
-        scheduleMidnightReschedule(postCount, startHour, endHour, postAction);
+        log.info("✅ Scheduled {} posts (skipped {} past times)", scheduled, postCount - scheduled);
     }
 
     public Optional<LocalDateTime> getNextScheduledPostTime() {
@@ -89,7 +122,7 @@ public class SchedulerService {
         log.debug("Post successfully scheduled for {}", scheduledTime.format(TIME_FORMATTER));
     }
 
-    private void scheduleMidnightReschedule(int postCount, int startHour, int endHour, Runnable postAction) {
+    private void scheduleMidnightReschedule(int startHour, int endHour, Runnable postAction) {
         var now = LocalDateTime.now();
 
         var nextMidnight = now.toLocalDate().plusDays(1).atStartOfDay();
@@ -100,14 +133,18 @@ public class SchedulerService {
             delaySeconds = 86400;
         }
 
-        log.info("Next schedule refresh at midnight in {} seconds ({} hours)",
-                delaySeconds, delaySeconds / 3600.0);
+        log.info("🌙 Next schedule refresh at midnight in {} seconds ({} hours)",
+                delaySeconds, String.format("%.1f", delaySeconds / 3600.0));
 
         midnightTask = scheduler.schedule(() -> {
             try {
-                log.info("=== Midnight reached - rescheduling daily posts ===");
+                log.info("🌅 === Midnight reached - generating new random post schedule ===");
                 clearPreviousDayTasks();
-                scheduleDailyPosts(postCount, startHour, endHour, postAction);
+
+                int newPostCount = generateRandomPostCount(minDailyPosts, maxDailyPosts);
+                schedulePostsWithCount(newPostCount, startHour, endHour, postAction);
+
+                scheduleMidnightReschedule(startHour, endHour, postAction);
             } catch (Exception e) {
                 log.error("Error during midnight rescheduling", e);
             }
@@ -119,7 +156,7 @@ public class SchedulerService {
                 .filter(future -> !future.isDone())
                 .count();
 
-        log.info("Clearing {} remaining tasks from previous day (total: {})",
+        log.info("🧹 Clearing {} remaining tasks from previous day (total: {})",
                 remainingTasks, scheduledPosts.size());
 
         scheduledPosts.forEach(future -> {

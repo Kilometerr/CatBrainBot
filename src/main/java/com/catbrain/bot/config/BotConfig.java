@@ -13,7 +13,8 @@ public record BotConfig(
         @NotNull String botToken,
         @NotNull String channelId,
         @Nullable String guildId,
-        int dailyPosts,
+        int minDailyPosts,
+        int maxDailyPosts,
         int startHour,
         int endHour
 ) {
@@ -25,8 +26,23 @@ public record BotConfig(
         if (startHour >= endHour) {
             throw new IllegalStateException("start.hour must be less than end.hour");
         }
-        if (dailyPosts <= 0) {
-            throw new IllegalStateException("daily.posts must be greater than 0");
+        if (minDailyPosts <= 0) {
+            throw new IllegalStateException("min.daily.posts must be greater than 0");
+        }
+        if (maxDailyPosts <= 0) {
+            throw new IllegalStateException("max.daily.posts must be greater than 0");
+        }
+        if (minDailyPosts > maxDailyPosts) {
+            throw new IllegalStateException("min.daily.posts must be less than or equal to max.daily.posts");
+        }
+
+        int windowMinutes = (endHour - startHour) * 60;
+        int minSpacing = 5;
+        int maxPossiblePosts = windowMinutes / minSpacing;
+
+        if (maxDailyPosts > maxPossiblePosts) {
+            log.warn("max.daily.posts ({}) exceeds what can fit in time window with 5-min spacing (max: {}). " +
+                    "Posts will be capped at {} when scheduling.", maxDailyPosts, maxPossiblePosts, maxPossiblePosts);
         }
     }
 
@@ -36,7 +52,8 @@ public record BotConfig(
         var botToken = getProperty(properties, "bot.token", "BOT_TOKEN");
         var channelId = getProperty(properties, "channel.id", "CHANNEL_ID");
         var guildId = getOptionalProperty(properties);
-        var dailyPosts = getIntProperty(properties, "daily.posts", "DAILY_POSTS");
+        var minDailyPosts = getIntProperty(properties, "min.daily.posts", "MIN_DAILY_POSTS");
+        var maxDailyPosts = getIntProperty(properties, "max.daily.posts", "MAX_DAILY_POSTS");
         var startHour = getIntProperty(properties, "start.hour", "START_HOUR");
         var endHour = getIntProperty(properties, "end.hour", "END_HOUR");
 
@@ -46,7 +63,7 @@ public record BotConfig(
             log.info("Configuration loaded successfully (guild ID not set - bot will work in any guild).");
         }
 
-        return new BotConfig(botToken, channelId, guildId, dailyPosts, startHour, endHour);
+        return new BotConfig(botToken, channelId, guildId, minDailyPosts, maxDailyPosts, startHour, endHour);
     }
 
     private static Properties loadProperties() throws IOException {
