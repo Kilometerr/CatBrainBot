@@ -36,10 +36,13 @@ public class StatusService {
     public StatusBox generateStatus(LocalDateTime nextPostTime) {
         log.debug("Generating new status box (next post time: {})", nextPostTime);
 
+        int coherence = generateCoherenceLevel();
+        String confusion = getConfusionFromCoherence(coherence);
+
         return new StatusBox(
                 generateBraincellStatus(),
-                generateCoherenceLevel(),
-                randomFrom(CONFUSION_LEVELS),
+                coherence,
+                confusion,
                 randomFrom(PROCESSING_SPEEDS),
                 randomFrom(MEMORY_CACHES),
                 generateSmartThoughtETA(nextPostTime)
@@ -53,13 +56,42 @@ public class StatusService {
     }
 
     private int generateCoherenceLevel() {
-        return random.nextInt(101); // 0 to 100 inclusive
+        return random.nextInt(101);
+    }
+
+    private String getConfusionFromCoherence(int coherence) {
+        int baseLevel;
+        if (coherence >= 80) {
+            baseLevel = 0;
+        } else if (coherence >= 60) {
+            baseLevel = 1;
+        } else if (coherence >= 40) {
+            baseLevel = 2;
+        } else if (coherence >= 20) {
+            baseLevel = 3;
+        } else {
+            baseLevel = 4;
+        }
+
+        if (random.nextInt(100) < 10) {
+            int shift = random.nextBoolean() ? 1 : -1;
+            int adjustedLevel = baseLevel + shift;
+
+            adjustedLevel = Math.max(0, Math.min(4, adjustedLevel));
+
+            log.debug("Confusion variance applied: base={} (coherence={}%), adjusted={}",
+                    baseLevel, coherence, adjustedLevel);
+
+            return CONFUSION_LEVELS.get(adjustedLevel);
+        }
+
+        return CONFUSION_LEVELS.get(baseLevel);
     }
 
     private String generateSmartThoughtETA(LocalDateTime nextPostTime) {
         if (nextPostTime == null) {
-            var minutes = 1 + random.nextInt(59); // 1 to 59
-            var seconds = random.nextInt(60); // 0 to 59
+            var minutes = 1 + random.nextInt(59);
+            var seconds = random.nextInt(60);
             return "%dm %ds".formatted(minutes, seconds);
         }
 
