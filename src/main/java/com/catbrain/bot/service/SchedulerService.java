@@ -29,15 +29,72 @@ public class SchedulerService {
 
     private int minDailyPosts;
     private int maxDailyPosts;
+    private PersistenceService persistenceService;
 
-    public void scheduleDailyPosts(int minPosts, int maxPosts, int startHour, int endHour, Runnable postAction) {
+    public void scheduleDailyPosts(int minPosts, int maxPosts, int startHour, int endHour,
+                                   Runnable postAction, PersistenceService persistence) {
         this.minDailyPosts = minPosts;
         this.maxDailyPosts = maxPosts;
+        this.persistenceService = persistence;
 
-        int postCount = generateRandomPostCount(minPosts, maxPosts);
+        if (restoreScheduleFromDatabase(startHour, endHour, postAction)) {
+            log.info("Schedule restored from database after restart");
+        } else {
+            int postCount = generateRandomPostCount(minPosts, maxPosts);
+            schedulePostsWithCount(postCount, startHour, endHour, postAction);
+        }
 
-        schedulePostsWithCount(postCount, startHour, endHour, postAction);
         scheduleMidnightReschedule(startHour, endHour, postAction);
+    }
+
+    private boolean restoreScheduleFromDatabase(int startHour, int endHour, Runnable postAction) {
+        if (persistenceService == null) {
+            log.warn("Persistence service not available, cannot restore schedule");
+            return false;
+        }
+
+        var unexecuted = persistenceService.getUnexecutedSchedules();
+        if (unexecuted.isEmpty()) {
+            log.info("No unexecuted schedules found in database");
+            return false;
+        }
+
+        var now = LocalDateTime.now();
+        var today = now.toLocalDate();
+
+        var todaySchedules = unexecuted.stream()
+                .filter(time -> time.toLocalDate().equals(today))
+                .toList();
+
+        if (todaySchedules.isEmpty()) {
+            log.info("No schedules for today found in database, will create new schedule");
+            persistenceService.clearOldSchedules(today);
+            return false;
+        }
+
+        log.info("🔄 Found {} scheduled posts for today in database", todaySchedules.size());
+
+        scheduledTimes.clear();
+        scheduledTimes.addAll(todaySchedules);
+
+        int restored = 0;
+        int skipped = 0;
+        for (LocalDateTime time : todaySchedules) {
+            if (time.isAfter(now)) {
+                schedulePost(time, postAction, true);
+                restored++;
+            } else {
+                persistenceService.markPostExecuted(time);
+                skipped++;
+                log.debug("Marked missed post as executed: {}", time.format(TIME_FORMATTER));
+            }
+        }
+
+        log.info("Restored {} future posts, marked {} missed posts as executed", restored, skipped);
+
+        persistenceService.clearOldSchedules(today);
+
+        return restored > 0 || skipped > 0;
     }
 
     private int generateRandomPostCount(int min, int max) {
@@ -46,7 +103,7 @@ public class SchedulerService {
         }
         int count = min + random.nextInt(max - min + 1);
 
-        log.info("🎲 Cat brain intensity for today: {} moments scheduled", count);
+        log.info("Cat brain intensity for today: {} moments scheduled", count);
         log.debug("Random post count generated: {} (range: {}-{})", count, min, max);
 
         return count;
@@ -59,7 +116,7 @@ public class SchedulerService {
         int maxPossiblePosts = windowMinutes / MIN_SPACING_MINUTES;
 
         if (postCount > maxPossiblePosts) {
-            log.warn("⚠️ Requested {} posts cannot fit in {}h window with {}-minute spacing " +
+            log.warn("Requested {} posts cannot fit in {}h window with {}-minute spacing " +
                             "(max: {}). Capping at {} posts.",
                     postCount, (endHour - startHour), MIN_SPACING_MINUTES, maxPossiblePosts, maxPossiblePosts);
             postCount = maxPossiblePosts;
@@ -73,23 +130,27 @@ public class SchedulerService {
         scheduledTimes.clear();
         scheduledTimes.addAll(times);
 
+        if (persistenceService != null) {
+            persistenceService.saveScheduledPosts(times);
+        }
+
         var currentHour = now.getHour();
         var dayLabel = (currentHour >= endHour) ? "tomorrow" : "today";
 
-        log.info("📅 Scheduled {} posts for {}:", postCount, dayLabel);
+        log.info("Scheduled {} posts for {}:", postCount, dayLabel);
         times.forEach(time -> log.info("  - {}", time.format(TIME_FORMATTER)));
 
         int scheduled = 0;
         for (LocalDateTime time : times) {
             if (time.isAfter(now)) {
-                schedulePost(time, postAction);
+                schedulePost(time, postAction, false);
                 scheduled++;
             } else {
                 log.debug("Skipping past time: {}", time.format(TIME_FORMATTER));
             }
         }
 
-        log.info("✅ Scheduled {} posts (skipped {} past times)", scheduled, postCount - scheduled);
+        log.info("Scheduled {} posts (skipped {} past times)", scheduled, postCount - scheduled);
     }
 
     public Optional<LocalDateTime> getNextScheduledPostTime() {
@@ -99,18 +160,24 @@ public class SchedulerService {
                 .min(LocalDateTime::compareTo);
     }
 
-    private void schedulePost(LocalDateTime scheduledTime, Runnable postAction) {
+    private void schedulePost(LocalDateTime scheduledTime, Runnable postAction, boolean isRestored) {
         var now = LocalDateTime.now();
         var delaySeconds = Math.max(1, ChronoUnit.SECONDS.between(now, scheduledTime));
 
-        log.debug("Scheduling post for {} in {} seconds",
-                scheduledTime.format(TIME_FORMATTER), delaySeconds);
+        log.debug("Scheduling post for {} in {} seconds{}",
+                scheduledTime.format(TIME_FORMATTER),
+                delaySeconds,
+                isRestored ? " (restored from DB)" : "");
 
         Runnable safePostAction = () -> {
             try {
                 log.info("Executing scheduled post now (was scheduled for {})",
                         scheduledTime.format(TIME_FORMATTER));
                 postAction.run();
+
+                if (persistenceService != null) {
+                    persistenceService.markPostExecuted(scheduledTime);
+                }
             } catch (Exception e) {
                 log.error("Error executing post action", e);
             }
@@ -133,7 +200,7 @@ public class SchedulerService {
             delaySeconds = 86400;
         }
 
-        log.info("🌙 Next schedule refresh at midnight in {} seconds ({} hours)",
+        log.info("Next schedule refresh at midnight in {} seconds ({} hours)",
                 delaySeconds, String.format("%.1f", delaySeconds / 3600.0));
 
         midnightTask = scheduler.schedule(() -> {

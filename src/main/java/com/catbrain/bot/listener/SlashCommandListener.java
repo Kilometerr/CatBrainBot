@@ -1,6 +1,7 @@
 package com.catbrain.bot.listener;
 
 import com.catbrain.bot.service.ChangelogManager;
+import com.catbrain.bot.service.PersistenceService;
 import com.catbrain.bot.service.SchedulerService;
 import com.catbrain.bot.service.StatusService;
 import com.catbrain.bot.util.StatusFormatter;
@@ -18,6 +19,7 @@ import org.jetbrains.annotations.Nullable;
 
 import java.awt.*;
 import java.time.Instant;
+import java.time.Period;
 import java.util.Objects;
 
 @Slf4j
@@ -26,6 +28,7 @@ public class SlashCommandListener extends ListenerAdapter {
     private final StatusService statusService;
     private final SchedulerService schedulerService;
     private final ChangelogManager changelogManager;
+    private final PersistenceService persistenceService;
     private final String channelId;
     @Nullable
     private final String guildId;
@@ -66,11 +69,21 @@ public class SlashCommandListener extends ListenerAdapter {
         log.info("Processing /catbrain {} command from user: {} in guild: {}",
                 subcommand, event.getUser().getAsTag(), Objects.requireNonNull(event.getGuild()).getName());
 
+        persistenceService.logCommandUsage(
+                "catbrain",
+                subcommand,
+                event.getUser().getId(),
+                event.getUser().getAsTag(),
+                event.getGuild().getId(),
+                event.getGuild().getName()
+        );
+
         try {
             switch (subcommand) {
                 case "check" -> handleCheckCommand(event);
                 case "help" -> handleHelpCommand(event);
                 case "changelog" -> handleChangelogCommand(event);
+                case "stats" -> handleStatsCommand(event);
                 default -> event.reply("❌ Unknown subcommand.")
                         .setEphemeral(true)
                         .queue();
@@ -104,7 +117,7 @@ public class SlashCommandListener extends ListenerAdapter {
                     })
                     .filter(choice -> userInput.isEmpty() ||
                             choice.getName().toLowerCase().contains(userInput))
-                    .limit(25)  // Discord limit
+                    .limit(25)
                     .toList();
 
             event.replyChoices(choices).queue();
@@ -142,6 +155,11 @@ public class SlashCommandListener extends ListenerAdapter {
                 .addField(
                         " `/catbrain check`",
                         "Immediately generates and displays the current cat brain status.",
+                        false
+                )
+                .addField(
+                        " `/catbrain stats [period]`",
+                        "View bot statistics and analytics. Optional period: `day`, `week`, `month`, or `alltime` (default: week).",
                         false
                 )
                 .addField(
@@ -189,5 +207,111 @@ public class SlashCommandListener extends ListenerAdapter {
 
             event.getHook().sendMessageEmbeds(errorEmbed).queue();
         }
+    }
+
+    private void handleStatsCommand(SlashCommandInteractionEvent event) {
+        event.deferReply(true).queue();
+
+        try {
+            var periodOption = event.getOption("period");
+            String periodStr = periodOption != null ? periodOption.getAsString().toLowerCase() : "week";
+
+            Period period = switch (periodStr) {
+                case "day" -> Period.ofDays(1);
+                case "week" -> Period.ofWeeks(1);
+                case "month" -> Period.ofMonths(1);
+                case "alltime" -> Period.ofYears(100); // Effectively all time
+                default -> Period.ofWeeks(1);
+            };
+
+            String periodLabel = switch (periodStr) {
+                case "day" -> "Today";
+                case "week" -> "This Week";
+                case "month" -> "This Month";
+                case "alltime" -> "All Time";
+                default -> "This Week";
+            };
+
+            var embed = buildStatsEmbed(period, periodLabel);
+
+            event.getHook().sendMessageEmbeds(embed).queue(
+                    success -> log.info("Stats displayed to user: {} (period: {})",
+                            event.getUser().getAsTag(), periodStr),
+                    error -> log.error("Failed to display stats", error)
+            );
+        } catch (Exception e) {
+            log.error("Error generating stats", e);
+
+            var errorEmbed = new EmbedBuilder()
+                    .setTitle("❌ Statistics Error")
+                    .setDescription("Failed to generate statistics. Please try again later.")
+                    .setColor(new Color(240, 71, 71))
+                    .setTimestamp(Instant.now())
+                    .build();
+
+            event.getHook().sendMessageEmbeds(errorEmbed).queue();
+        }
+    }
+
+    private MessageEmbed buildStatsEmbed(Period period, String periodLabel) {
+        var embed = new EmbedBuilder()
+                .setTitle("📊 Cat Brain Statistics - " + periodLabel)
+                .setColor(new Color(67, 181, 129))
+                .setTimestamp(Instant.now());
+
+        int postCount = persistenceService.getPostCount(period);
+        int totalPosts = persistenceService.getTotalPostCount();
+        double avgCoherence = persistenceService.getAverageCoherence(period);
+
+        embed.addField("📝 Total Posts", String.valueOf(postCount), true);
+
+        if (postCount > 0) {
+            embed.addField("🧠 Avg Coherence", String.format("%.1f%%", avgCoherence), true);
+            embed.addBlankField(true);
+        }
+
+        var statusDist = persistenceService.getBraincellStatusDistribution(period);
+        if (!statusDist.isEmpty()) {
+            StringBuilder statusText = new StringBuilder();
+            statusDist.forEach((status, count) -> {
+                double percentage = (count * 100.0) / postCount;
+                statusText.append(String.format("**%s**: %d (%.1f%%)\n", status, count, percentage));
+            });
+            embed.addField("🔌 Braincell Status Distribution", statusText.toString().trim(), false);
+        }
+
+        var confusionDist = persistenceService.getConfusionDistribution(period);
+        if (!confusionDist.isEmpty() && confusionDist.size() <= 5) {
+            StringBuilder confusionText = new StringBuilder();
+            confusionDist.forEach((confusion, count) -> {
+                double percentage = (count * 100.0) / postCount;
+                confusionText.append(String.format("**%s**: %d (%.1f%%)\n", confusion, count, percentage));
+            });
+            embed.addField("😵 Confusion Index Distribution", confusionText.toString().trim(), false);
+        }
+
+        // Command usage
+        int commandCount = persistenceService.getCommandUsageCount(period);
+        if (commandCount > 0) {
+            embed.addField("⚡ Commands Used", String.valueOf(commandCount), true);
+
+            var topCommands = persistenceService.getTopCommands(period, 3);
+            if (!topCommands.isEmpty()) {
+                StringBuilder commandText = new StringBuilder();
+                topCommands.forEach((cmd, count) ->
+                        commandText.append(String.format("`%s`: %d\n", cmd, count))
+                );
+                embed.addField("🏆 Top Commands", commandText.toString().trim(), true);
+            }
+        }
+
+        if (!periodLabel.equals("All Time")) {
+            embed.setFooter(String.format("All-time posts: %d • %s",
+                    totalPosts, VersionUtil.getFormattedVersion()));
+        } else {
+            embed.setFooter(VersionUtil.getFormattedVersion());
+        }
+
+        return embed.build();
     }
 }
