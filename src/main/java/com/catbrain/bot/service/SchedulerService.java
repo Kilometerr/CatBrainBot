@@ -37,9 +37,10 @@ public class SchedulerService {
         this.maxDailyPosts = maxPosts;
         this.persistenceService = persistence;
 
-        if (restoreScheduleFromDatabase(startHour, endHour, postAction)) {
-            log.info("Schedule restored from database after restart");
+        if (restoreScheduleFromDatabase(postAction)) {
+            log.info("✅ Schedule restored from database after restart");
         } else {
+            // No valid schedule found, create new one
             int postCount = generateRandomPostCount(minPosts, maxPosts);
             schedulePostsWithCount(postCount, startHour, endHour, postAction);
         }
@@ -47,7 +48,7 @@ public class SchedulerService {
         scheduleMidnightReschedule(startHour, endHour, postAction);
     }
 
-    private boolean restoreScheduleFromDatabase(int startHour, int endHour, Runnable postAction) {
+    private boolean restoreScheduleFromDatabase(Runnable postAction) {
         if (persistenceService == null) {
             log.warn("Persistence service not available, cannot restore schedule");
             return false;

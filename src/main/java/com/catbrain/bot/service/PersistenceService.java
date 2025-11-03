@@ -126,80 +126,7 @@ public class PersistenceService implements AutoCloseable {
         }
     }
 
-    public List<PostRecord> getPostHistory(LocalDate date) {
-        String sql = """
-            SELECT * FROM post_history 
-            WHERE DATE(posted_at) = ?
-            ORDER BY posted_at DESC
-            """;
-
-        List<PostRecord> records = new ArrayList<>();
-        try (PreparedStatement pstmt = connection.prepareStatement(sql)) {
-            pstmt.setString(1, date.toString());
-
-            try (ResultSet rs = pstmt.executeQuery()) {
-                while (rs.next()) {
-                    records.add(mapToPostRecord(rs));
-                }
-            }
-        } catch (SQLException e) {
-            log.error("Failed to retrieve post history for date: {}", date, e);
-        }
-
-        return records;
-    }
-
-    public List<PostRecord> getRecentPosts(int limit) {
-        String sql = "SELECT * FROM post_history ORDER BY posted_at DESC LIMIT ?";
-
-        List<PostRecord> records = new ArrayList<>();
-        try (PreparedStatement pstmt = connection.prepareStatement(sql)) {
-            pstmt.setInt(1, limit);
-
-            try (ResultSet rs = pstmt.executeQuery()) {
-                while (rs.next()) {
-                    records.add(mapToPostRecord(rs));
-                }
-            }
-        } catch (SQLException e) {
-            log.error("Failed to retrieve recent posts", e);
-        }
-
-        return records;
-    }
-
-    private PostRecord mapToPostRecord(ResultSet rs) throws SQLException {
-        return new PostRecord(
-                rs.getLong("id"),
-                LocalDateTime.parse(rs.getString("posted_at"), SQL_DATETIME_FORMAT),
-                rs.getString("braincell_status"),
-                rs.getInt("coherence_level"),
-                rs.getString("confusion_index"),
-                rs.getString("processing_speed"),
-                rs.getString("memory_cache"),
-                rs.getString("smart_thought_eta"),
-                rs.getString("channel_id")
-        );
-    }
-
     // ==================== SCHEDULED POSTS ====================
-
-    public void saveScheduledPost(LocalDateTime scheduledFor) {
-        String sql = """
-            INSERT OR IGNORE INTO scheduled_posts (scheduled_for, created_at)
-            VALUES (?, ?)
-            """;
-
-        try (PreparedStatement pstmt = connection.prepareStatement(sql)) {
-            pstmt.setString(1, scheduledFor.format(SQL_DATETIME_FORMAT));
-            pstmt.setString(2, LocalDateTime.now().format(SQL_DATETIME_FORMAT));
-            pstmt.executeUpdate();
-
-            log.debug("Saved scheduled post: {}", scheduledFor);
-        } catch (SQLException e) {
-            log.error("Failed to save scheduled post", e);
-        }
-    }
 
     public void saveScheduledPosts(List<LocalDateTime> scheduledTimes) {
         String sql = """
@@ -456,44 +383,6 @@ public class PersistenceService implements AutoCloseable {
         }
 
         return commands;
-    }
-
-    // ==================== BOT STATE ====================
-
-    public void setState(String key, String value) {
-        String sql = """
-            INSERT OR REPLACE INTO bot_state (key, value, updated_at)
-            VALUES (?, ?, ?)
-            """;
-
-        try (PreparedStatement pstmt = connection.prepareStatement(sql)) {
-            pstmt.setString(1, key);
-            pstmt.setString(2, value);
-            pstmt.setString(3, LocalDateTime.now().format(SQL_DATETIME_FORMAT));
-
-            pstmt.executeUpdate();
-            log.debug("Set bot state: {} = {}", key, value);
-        } catch (SQLException e) {
-            log.error("Failed to set bot state", e);
-        }
-    }
-
-    public Optional<String> getState(String key) {
-        String sql = "SELECT value FROM bot_state WHERE key = ?";
-
-        try (PreparedStatement pstmt = connection.prepareStatement(sql)) {
-            pstmt.setString(1, key);
-
-            try (ResultSet rs = pstmt.executeQuery()) {
-                if (rs.next()) {
-                    return Optional.of(rs.getString("value"));
-                }
-            }
-        } catch (SQLException e) {
-            log.error("Failed to get bot state for key: {}", key, e);
-        }
-
-        return Optional.empty();
     }
 
     // ==================== CLEANUP ====================
