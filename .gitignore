@@ -77,3 +77,4 @@ src/main/resources/config.properties
 # Keep the template files (these are safe to commit)
 !config.properties.template
 !*.template
+/data/catbrain.db
