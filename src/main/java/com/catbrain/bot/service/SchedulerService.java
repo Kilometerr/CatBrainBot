@@ -38,7 +38,7 @@ public class SchedulerService {
         this.persistenceService = persistence;
 
         if (restoreScheduleFromDatabase(postAction)) {
-            log.info("✅ Schedule restored from database after restart");
+            log.info("Schedule restored from database after restart");
         } else {
             // No valid schedule found, create new one
             int postCount = generateRandomPostCount(minPosts, maxPosts);
@@ -73,7 +73,7 @@ public class SchedulerService {
             return false;
         }
 
-        log.info("🔄 Found {} scheduled posts for today in database", todaySchedules.size());
+        log.info("Found {} scheduled posts for today in database", todaySchedules.size());
 
         scheduledTimes.clear();
         scheduledTimes.addAll(todaySchedules);
@@ -156,8 +156,9 @@ public class SchedulerService {
 
     public Optional<LocalDateTime> getNextScheduledPostTime() {
         var now = LocalDateTime.now();
+        var threshold = now.plusSeconds(5);
         return scheduledTimes.stream()
-                .filter(time -> time.isAfter(now))
+                .filter(time -> time.isAfter(threshold))
                 .min(LocalDateTime::compareTo);
     }
 
@@ -206,7 +207,7 @@ public class SchedulerService {
 
         midnightTask = scheduler.schedule(() -> {
             try {
-                log.info("🌅 === Midnight reached - generating new random post schedule ===");
+                log.info("=== Midnight reached - generating new random post schedule ===");
                 clearPreviousDayTasks();
 
                 int newPostCount = generateRandomPostCount(minDailyPosts, maxDailyPosts);
@@ -224,7 +225,7 @@ public class SchedulerService {
                 .filter(future -> !future.isDone())
                 .count();
 
-        log.info("🧹 Clearing {} remaining tasks from previous day (total: {})",
+        log.info("Clearing {} remaining tasks from previous day (total: {})",
                 remainingTasks, scheduledPosts.size());
 
         scheduledPosts.forEach(future -> {

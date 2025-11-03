@@ -104,14 +104,31 @@ public class StatusService {
         var duration = Duration.between(now, nextPostTime);
         var totalSeconds = duration.getSeconds();
 
+        if (totalSeconds < 30) {
+            return "Any moment now...";
+        }
+
+        if (totalSeconds < 60) {
+            return "Less than a minute";
+        }
+
         if (totalSeconds >= 3600) {
             var hours = totalSeconds / 3600;
             var minutes = (totalSeconds % 3600) / 60;
+            if (minutes == 0) {
+                return "%dh".formatted(hours);
+            }
             return "%dh %dm".formatted(hours, minutes);
         }
 
         var minutes = totalSeconds / 60;
         var seconds = totalSeconds % 60;
+
+        // For cleaner display, show only minutes if seconds are low
+        if (seconds < 10) {
+            return "%dm".formatted(minutes);
+        }
+
         return "%dm %ds".formatted(minutes, seconds);
     }
 
