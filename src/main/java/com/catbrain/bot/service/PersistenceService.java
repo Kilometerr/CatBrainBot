@@ -1,6 +1,5 @@
 package com.catbrain.bot.service;
 
-import com.catbrain.bot.model.PostRecord;
 import com.catbrain.bot.model.StatusBox;
 import lombok.extern.slf4j.Slf4j;
 
@@ -14,24 +13,50 @@ import java.util.*;
 
 @Slf4j
 public class PersistenceService implements AutoCloseable {
-    private static final String DB_FILE = "catbrain.db";
     private static final DateTimeFormatter SQL_DATETIME_FORMAT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
     private final Connection connection;
 
     public PersistenceService() throws SQLException {
-        boolean isNewDatabase = !new File(DB_FILE).exists();
+        File baseDir = determineBaseDirectory();
+        File dataDir = new File(baseDir, "data");
 
-        this.connection = DriverManager.getConnection("jdbc:sqlite:" + DB_FILE);
+        if (!dataDir.exists()) {
+            if (dataDir.mkdirs()) {
+                log.info("Created data directory: {}", dataDir.getAbsolutePath());
+            } else {
+                log.warn("Failed to create data directory: {}", dataDir.getAbsolutePath());
+            }
+        }
+
+        String dbPath = new File(dataDir, "catbrain.db").getAbsolutePath();
+        boolean isNewDatabase = !new File(dbPath).exists();
+
+        this.connection = DriverManager.getConnection("jdbc:sqlite:" + dbPath);
         this.connection.setAutoCommit(true);
 
         if (isNewDatabase) {
-            log.info("Creating new database: {}", DB_FILE);
+            log.info("Creating new database: {}", dbPath);
         } else {
-            log.info("Connected to existing database: {}", DB_FILE);
+            log.info("Connected to existing database: {}", dbPath);
         }
 
         initializeSchema();
+    }
+
+    private File determineBaseDirectory() {
+        File currentDir = new File(System.getProperty("user.dir"));
+
+        if (currentDir.getName().equals("target")) {
+            File parentDir = currentDir.getParentFile();
+            if (parentDir != null) {
+                log.debug("Running from target/ directory, using project root: {}", parentDir.getAbsolutePath());
+                return parentDir;
+            }
+        }
+
+        log.debug("Using current directory as base: {}", currentDir.getAbsolutePath());
+        return currentDir;
     }
 
     private void initializeSchema() throws SQLException {
