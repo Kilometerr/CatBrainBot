@@ -8,6 +8,7 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 import java.util.Random;
@@ -23,9 +24,11 @@ public class SchedulerService {
 
     private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(2);
     private final Random random = new SecureRandom();
-    private final List<ScheduledFuture<?>> scheduledPosts = new ArrayList<>();
-    private final List<LocalDateTime> scheduledTimes = new ArrayList<>();
-    private ScheduledFuture<?> midnightTask;
+
+    private final List<ScheduledFuture<?>> scheduledPosts = Collections.synchronizedList(new ArrayList<>());
+    private final List<LocalDateTime> scheduledTimes = Collections.synchronizedList(new ArrayList<>());
+
+    private volatile ScheduledFuture<?> midnightTask;
 
     private int minDailyPosts;
     private int maxDailyPosts;
@@ -33,6 +36,16 @@ public class SchedulerService {
 
     public void scheduleDailyPosts(int minPosts, int maxPosts, int startHour, int endHour,
                                    Runnable postAction, PersistenceService persistence) {
+        // Validate parameters early
+        if (minPosts > maxPosts) {
+            throw new IllegalArgumentException(String.format(
+                    "minPosts must be <= maxPosts: received minPosts=%d, maxPosts=%d", minPosts, maxPosts));
+        }
+        if (minPosts <= 0) {
+            throw new IllegalArgumentException(String.format(
+                    "minPosts must be > 0: received minPosts=%d", minPosts));
+        }
+
         this.minDailyPosts = minPosts;
         this.maxDailyPosts = maxPosts;
         this.persistenceService = persistence;
@@ -40,7 +53,6 @@ public class SchedulerService {
         if (restoreScheduleFromDatabase(postAction)) {
             log.info("Schedule restored from database after restart");
         } else {
-            // No valid schedule found, create new one
             int postCount = generateRandomPostCount(minPosts, maxPosts);
             schedulePostsWithCount(postCount, startHour, endHour, postAction);
         }
@@ -75,8 +87,10 @@ public class SchedulerService {
 
         log.info("Found {} scheduled posts for today in database", todaySchedules.size());
 
-        scheduledTimes.clear();
-        scheduledTimes.addAll(todaySchedules);
+        synchronized (scheduledTimes) {
+            scheduledTimes.clear();
+            scheduledTimes.addAll(todaySchedules);
+        }
 
         int restored = 0;
         int skipped = 0;
@@ -95,7 +109,7 @@ public class SchedulerService {
 
         persistenceService.clearOldSchedules(today);
 
-        return restored > 0 || skipped > 0;
+        return restored > 0;
     }
 
     private int generateRandomPostCount(int min, int max) {
@@ -128,8 +142,10 @@ public class SchedulerService {
                 .sorted()
                 .toList();
 
-        scheduledTimes.clear();
-        scheduledTimes.addAll(times);
+        synchronized (scheduledTimes) {
+            scheduledTimes.clear();
+            scheduledTimes.addAll(times);
+        }
 
         if (persistenceService != null) {
             persistenceService.saveScheduledPosts(times);
@@ -157,9 +173,12 @@ public class SchedulerService {
     public Optional<LocalDateTime> getNextScheduledPostTime() {
         var now = LocalDateTime.now();
         var threshold = now.plusSeconds(5);
-        return scheduledTimes.stream()
-                .filter(time -> time.isAfter(threshold))
-                .min(LocalDateTime::compareTo);
+
+        synchronized (scheduledTimes) {
+            return scheduledTimes.stream()
+                    .filter(time -> time.isAfter(threshold))
+                    .min(LocalDateTime::compareTo);
+        }
     }
 
     private void schedulePost(LocalDateTime scheduledTime, Runnable postAction, boolean isRestored) {
@@ -186,7 +205,9 @@ public class SchedulerService {
         };
 
         var future = scheduler.schedule(safePostAction, delaySeconds, TimeUnit.SECONDS);
-        scheduledPosts.add(future);
+        synchronized (scheduledPosts) {
+            scheduledPosts.add(future);
+        }
 
         log.debug("Post successfully scheduled for {}", scheduledTime.format(TIME_FORMATTER));
     }
@@ -221,23 +242,29 @@ public class SchedulerService {
     }
 
     private void clearPreviousDayTasks() {
-        int remainingTasks = (int) scheduledPosts.stream()
-                .filter(future -> !future.isDone())
-                .count();
+        synchronized (scheduledPosts) {
+            int remainingTasks = (int) scheduledPosts.stream()
+                    .filter(future -> !future.isDone())
+                    .count();
 
-        log.info("Clearing {} remaining tasks from previous day (total: {})",
-                remainingTasks, scheduledPosts.size());
+            log.info("Clearing {} remaining tasks from previous day (total: {})",
+                    remainingTasks, scheduledPosts.size());
 
-        scheduledPosts.forEach(future -> {
-            if (!future.isDone()) {
-                future.cancel(false);
-            }
-        });
-        scheduledPosts.clear();
-        scheduledTimes.clear();
+            scheduledPosts.forEach(future -> {
+                if (!future.isDone()) {
+                    future.cancel(false);
+                }
+            });
+            scheduledPosts.clear();
+        }
 
-        if (midnightTask != null && !midnightTask.isDone()) {
-            midnightTask.cancel(false);
+        synchronized (scheduledTimes) {
+            scheduledTimes.clear();
+        }
+
+        var task = midnightTask;
+        if (task != null && !task.isDone()) {
+            task.cancel(false);
         }
     }
 

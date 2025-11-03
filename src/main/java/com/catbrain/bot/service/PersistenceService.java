@@ -15,6 +15,7 @@ import java.util.*;
 public class PersistenceService implements AutoCloseable {
     private static final DateTimeFormatter SQL_DATETIME_FORMAT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
+    private final Object dbLock = new Object(); // Thread-safety lock
     private final Connection connection;
 
     public PersistenceService() throws SQLException {
@@ -60,174 +61,186 @@ public class PersistenceService implements AutoCloseable {
     }
 
     private void initializeSchema() throws SQLException {
-        String[] schemas = {
+        synchronized (dbLock) {
+            String[] schemas = {
+                    """
+                CREATE TABLE IF NOT EXISTS post_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    posted_at TEXT NOT NULL,
+                    braincell_status TEXT NOT NULL,
+                    coherence_level INTEGER NOT NULL,
+                    confusion_index TEXT NOT NULL,
+                    processing_speed TEXT NOT NULL,
+                    memory_cache TEXT NOT NULL,
+                    smart_thought_eta TEXT NOT NULL,
+                    channel_id TEXT NOT NULL
+                )
+                """,
+                    """
+                CREATE INDEX IF NOT EXISTS idx_post_history_posted_at 
+                ON post_history(posted_at)
+                """,
+                    """
+                CREATE TABLE IF NOT EXISTS scheduled_posts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    scheduled_for TEXT NOT NULL UNIQUE,
+                    created_at TEXT NOT NULL,
+                    executed INTEGER DEFAULT 0,
+                    executed_at TEXT
+                )
+                """,
+                    """
+                CREATE INDEX IF NOT EXISTS idx_scheduled_posts_executed 
+                ON scheduled_posts(executed, scheduled_for)
+                """,
+                    """
+                CREATE TABLE IF NOT EXISTS command_usage (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    command_name TEXT NOT NULL,
+                    subcommand TEXT,
+                    user_id TEXT NOT NULL,
+                    user_tag TEXT NOT NULL,
+                    guild_id TEXT,
+                    guild_name TEXT,
+                    executed_at TEXT NOT NULL
+                )
+                """,
+                    """
+                CREATE INDEX IF NOT EXISTS idx_command_usage_executed_at 
+                ON command_usage(executed_at)
+                """,
+                    """
+                CREATE TABLE IF NOT EXISTS bot_state (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
                 """
-            CREATE TABLE IF NOT EXISTS post_history (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                posted_at TEXT NOT NULL,
-                braincell_status TEXT NOT NULL,
-                coherence_level INTEGER NOT NULL,
-                confusion_index TEXT NOT NULL,
-                processing_speed TEXT NOT NULL,
-                memory_cache TEXT NOT NULL,
-                smart_thought_eta TEXT NOT NULL,
-                channel_id TEXT NOT NULL
-            )
-            """,
-                """
-            CREATE INDEX IF NOT EXISTS idx_post_history_posted_at 
-            ON post_history(posted_at)
-            """,
-                """
-            CREATE TABLE IF NOT EXISTS scheduled_posts (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                scheduled_for TEXT NOT NULL UNIQUE,
-                created_at TEXT NOT NULL,
-                executed INTEGER DEFAULT 0,
-                executed_at TEXT
-            )
-            """,
-                """
-            CREATE INDEX IF NOT EXISTS idx_scheduled_posts_executed 
-            ON scheduled_posts(executed, scheduled_for)
-            """,
-                """
-            CREATE TABLE IF NOT EXISTS command_usage (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                command_name TEXT NOT NULL,
-                subcommand TEXT,
-                user_id TEXT NOT NULL,
-                user_tag TEXT NOT NULL,
-                guild_id TEXT,
-                guild_name TEXT,
-                executed_at TEXT NOT NULL
-            )
-            """,
-                """
-            CREATE INDEX IF NOT EXISTS idx_command_usage_executed_at 
-            ON command_usage(executed_at)
-            """,
-                """
-            CREATE TABLE IF NOT EXISTS bot_state (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            )
-            """
-        };
+            };
 
-        try (Statement stmt = connection.createStatement()) {
-            for (String schema : schemas) {
-                stmt.execute(schema);
+            try (Statement stmt = connection.createStatement()) {
+                for (String schema : schemas) {
+                    stmt.execute(schema);
+                }
+                log.info("Database schema initialized successfully");
             }
-            log.info("Database schema initialized successfully");
         }
     }
 
     // ==================== POST HISTORY ====================
 
     public void savePost(StatusBox status, LocalDateTime postedAt, String channelId) {
-        String sql = """
-            INSERT INTO post_history 
-            (posted_at, braincell_status, coherence_level, confusion_index, 
-             processing_speed, memory_cache, smart_thought_eta, channel_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """;
+        synchronized (dbLock) {
+            String sql = """
+                INSERT INTO post_history 
+                (posted_at, braincell_status, coherence_level, confusion_index, 
+                 processing_speed, memory_cache, smart_thought_eta, channel_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """;
 
-        try (PreparedStatement pstmt = connection.prepareStatement(sql)) {
-            pstmt.setString(1, postedAt.format(SQL_DATETIME_FORMAT));
-            pstmt.setString(2, status.braincellStatus());
-            pstmt.setInt(3, status.coherenceLevel());
-            pstmt.setString(4, status.confusionIndex());
-            pstmt.setString(5, status.processingSpeed());
-            pstmt.setString(6, status.memoryCache());
-            pstmt.setString(7, status.smartThoughtETA());
-            pstmt.setString(8, channelId);
+            try (PreparedStatement pstmt = connection.prepareStatement(sql)) {
+                pstmt.setString(1, postedAt.format(SQL_DATETIME_FORMAT));
+                pstmt.setString(2, status.braincellStatus());
+                pstmt.setInt(3, status.coherenceLevel());
+                pstmt.setString(4, status.confusionIndex());
+                pstmt.setString(5, status.processingSpeed());
+                pstmt.setString(6, status.memoryCache());
+                pstmt.setString(7, status.smartThoughtETA());
+                pstmt.setString(8, channelId);
 
-            pstmt.executeUpdate();
-            log.debug("Saved post to database: {} at {}", status.braincellStatus(), postedAt);
-        } catch (SQLException e) {
-            log.error("Failed to save post to database", e);
+                pstmt.executeUpdate();
+                log.debug("Saved post to database: {} at {}", status.braincellStatus(), postedAt);
+            } catch (SQLException e) {
+                log.error("Failed to save post to database", e);
+            }
         }
     }
 
     // ==================== SCHEDULED POSTS ====================
 
     public void saveScheduledPosts(List<LocalDateTime> scheduledTimes) {
-        String sql = """
-            INSERT OR IGNORE INTO scheduled_posts (scheduled_for, created_at)
-            VALUES (?, ?)
-            """;
+        synchronized (dbLock) {
+            String sql = """
+                INSERT OR IGNORE INTO scheduled_posts (scheduled_for, created_at)
+                VALUES (?, ?)
+                """;
 
-        try (PreparedStatement pstmt = connection.prepareStatement(sql)) {
-            String now = LocalDateTime.now().format(SQL_DATETIME_FORMAT);
+            try (PreparedStatement pstmt = connection.prepareStatement(sql)) {
+                String now = LocalDateTime.now().format(SQL_DATETIME_FORMAT);
 
-            for (LocalDateTime time : scheduledTimes) {
-                pstmt.setString(1, time.format(SQL_DATETIME_FORMAT));
-                pstmt.setString(2, now);
-                pstmt.addBatch();
+                for (LocalDateTime time : scheduledTimes) {
+                    pstmt.setString(1, time.format(SQL_DATETIME_FORMAT));
+                    pstmt.setString(2, now);
+                    pstmt.addBatch();
+                }
+
+                pstmt.executeBatch();
+                log.info("Saved {} scheduled posts to database", scheduledTimes.size());
+            } catch (SQLException e) {
+                log.error("Failed to save scheduled posts batch", e);
             }
-
-            pstmt.executeBatch();
-            log.info("Saved {} scheduled posts to database", scheduledTimes.size());
-        } catch (SQLException e) {
-            log.error("Failed to save scheduled posts batch", e);
         }
     }
 
     public List<LocalDateTime> getUnexecutedSchedules() {
-        String sql = """
-            SELECT scheduled_for FROM scheduled_posts 
-            WHERE executed = 0 
-            ORDER BY scheduled_for ASC
-            """;
+        synchronized (dbLock) {
+            String sql = """
+                SELECT scheduled_for FROM scheduled_posts 
+                WHERE executed = 0 
+                ORDER BY scheduled_for ASC
+                """;
 
-        List<LocalDateTime> times = new ArrayList<>();
-        try (Statement stmt = connection.createStatement();
-             ResultSet rs = stmt.executeQuery(sql)) {
+            List<LocalDateTime> times = new ArrayList<>();
+            try (Statement stmt = connection.createStatement();
+                 ResultSet rs = stmt.executeQuery(sql)) {
 
-            while (rs.next()) {
-                times.add(LocalDateTime.parse(rs.getString("scheduled_for"), SQL_DATETIME_FORMAT));
+                while (rs.next()) {
+                    times.add(LocalDateTime.parse(rs.getString("scheduled_for"), SQL_DATETIME_FORMAT));
+                }
+
+                log.info("Retrieved {} unexecuted scheduled posts from database", times.size());
+            } catch (SQLException e) {
+                log.error("Failed to retrieve unexecuted schedules", e);
             }
 
-            log.info("Retrieved {} unexecuted scheduled posts from database", times.size());
-        } catch (SQLException e) {
-            log.error("Failed to retrieve unexecuted schedules", e);
+            return times;
         }
-
-        return times;
     }
 
     public void markPostExecuted(LocalDateTime scheduledFor) {
-        String sql = """
-            UPDATE scheduled_posts 
-            SET executed = 1, executed_at = ?
-            WHERE scheduled_for = ?
-            """;
+        synchronized (dbLock) {
+            String sql = """
+                UPDATE scheduled_posts 
+                SET executed = 1, executed_at = ?
+                WHERE scheduled_for = ?
+                """;
 
-        try (PreparedStatement pstmt = connection.prepareStatement(sql)) {
-            pstmt.setString(1, LocalDateTime.now().format(SQL_DATETIME_FORMAT));
-            pstmt.setString(2, scheduledFor.format(SQL_DATETIME_FORMAT));
-            pstmt.executeUpdate();
+            try (PreparedStatement pstmt = connection.prepareStatement(sql)) {
+                pstmt.setString(1, LocalDateTime.now().format(SQL_DATETIME_FORMAT));
+                pstmt.setString(2, scheduledFor.format(SQL_DATETIME_FORMAT));
+                pstmt.executeUpdate();
 
-            log.debug("Marked post as executed: {}", scheduledFor);
-        } catch (SQLException e) {
-            log.error("Failed to mark post as executed", e);
+                log.debug("Marked post as executed: {}", scheduledFor);
+            } catch (SQLException e) {
+                log.error("Failed to mark post as executed", e);
+            }
         }
     }
 
     public void clearOldSchedules(LocalDate beforeDate) {
-        String sql = "DELETE FROM scheduled_posts WHERE DATE(scheduled_for) < ?";
+        synchronized (dbLock) {
+            String sql = "DELETE FROM scheduled_posts WHERE DATE(scheduled_for) < ?";
 
-        try (PreparedStatement pstmt = connection.prepareStatement(sql)) {
-            pstmt.setString(1, beforeDate.toString());
-            int deleted = pstmt.executeUpdate();
+            try (PreparedStatement pstmt = connection.prepareStatement(sql)) {
+                pstmt.setString(1, beforeDate.toString());
+                int deleted = pstmt.executeUpdate();
 
-            if (deleted > 0) {
-                log.info("Cleared {} old scheduled posts from before {}", deleted, beforeDate);
+                if (deleted > 0) {
+                    log.info("Cleared {} old scheduled posts from before {}", deleted, beforeDate);
+                }
+            } catch (SQLException e) {
+                log.error("Failed to clear old schedules", e);
             }
-        } catch (SQLException e) {
-            log.error("Failed to clear old schedules", e);
         }
     }
 
@@ -235,192 +248,210 @@ public class PersistenceService implements AutoCloseable {
 
     public void logCommandUsage(String commandName, String subcommand, String userId,
                                 String userTag, String guildId, String guildName) {
-        String sql = """
-            INSERT INTO command_usage 
-            (command_name, subcommand, user_id, user_tag, guild_id, guild_name, executed_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """;
+        synchronized (dbLock) {
+            String sql = """
+                INSERT INTO command_usage 
+                (command_name, subcommand, user_id, user_tag, guild_id, guild_name, executed_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """;
 
-        try (PreparedStatement pstmt = connection.prepareStatement(sql)) {
-            pstmt.setString(1, commandName);
-            pstmt.setString(2, subcommand);
-            pstmt.setString(3, userId);
-            pstmt.setString(4, userTag);
-            pstmt.setString(5, guildId);
-            pstmt.setString(6, guildName);
-            pstmt.setString(7, LocalDateTime.now().format(SQL_DATETIME_FORMAT));
+            try (PreparedStatement pstmt = connection.prepareStatement(sql)) {
+                pstmt.setString(1, commandName);
+                pstmt.setString(2, subcommand);
+                pstmt.setString(3, userId);
+                pstmt.setString(4, userTag);
+                pstmt.setString(5, guildId);
+                pstmt.setString(6, guildName);
+                pstmt.setString(7, LocalDateTime.now().format(SQL_DATETIME_FORMAT));
 
-            pstmt.executeUpdate();
-        } catch (SQLException e) {
-            log.error("Failed to log command usage", e);
+                pstmt.executeUpdate();
+            } catch (SQLException e) {
+                log.error("Failed to log command usage", e);
+            }
         }
     }
 
     // ==================== STATISTICS ====================
 
     public int getPostCount(Period period) {
-        LocalDateTime cutoff = LocalDateTime.now().minus(period);
-        String sql = "SELECT COUNT(*) FROM post_history WHERE posted_at >= ?";
+        synchronized (dbLock) {
+            LocalDateTime cutoff = LocalDateTime.now().minus(period);
+            String sql = "SELECT COUNT(*) FROM post_history WHERE posted_at >= ?";
 
-        try (PreparedStatement pstmt = connection.prepareStatement(sql)) {
-            pstmt.setString(1, cutoff.format(SQL_DATETIME_FORMAT));
+            try (PreparedStatement pstmt = connection.prepareStatement(sql)) {
+                pstmt.setString(1, cutoff.format(SQL_DATETIME_FORMAT));
 
-            try (ResultSet rs = pstmt.executeQuery()) {
-                if (rs.next()) {
-                    return rs.getInt(1);
+                try (ResultSet rs = pstmt.executeQuery()) {
+                    if (rs.next()) {
+                        return rs.getInt(1);
+                    }
                 }
+            } catch (SQLException e) {
+                log.error("Failed to get post count", e);
             }
-        } catch (SQLException e) {
-            log.error("Failed to get post count", e);
-        }
 
-        return 0;
+            return 0;
+        }
     }
 
     public int getTotalPostCount() {
-        String sql = "SELECT COUNT(*) FROM post_history";
+        synchronized (dbLock) {
+            String sql = "SELECT COUNT(*) FROM post_history";
 
-        try (Statement stmt = connection.createStatement();
-             ResultSet rs = stmt.executeQuery(sql)) {
+            try (Statement stmt = connection.createStatement();
+                 ResultSet rs = stmt.executeQuery(sql)) {
 
-            if (rs.next()) {
-                return rs.getInt(1);
-            }
-        } catch (SQLException e) {
-            log.error("Failed to get total post count", e);
-        }
-
-        return 0;
-    }
-
-    public double getAverageCoherence(Period period) {
-        LocalDateTime cutoff = LocalDateTime.now().minus(period);
-        String sql = "SELECT AVG(coherence_level) FROM post_history WHERE posted_at >= ?";
-
-        try (PreparedStatement pstmt = connection.prepareStatement(sql)) {
-            pstmt.setString(1, cutoff.format(SQL_DATETIME_FORMAT));
-
-            try (ResultSet rs = pstmt.executeQuery()) {
-                if (rs.next()) {
-                    return rs.getDouble(1);
-                }
-            }
-        } catch (SQLException e) {
-            log.error("Failed to get average coherence", e);
-        }
-
-        return 0.0;
-    }
-
-    public Map<String, Integer> getBraincellStatusDistribution(Period period) {
-        LocalDateTime cutoff = LocalDateTime.now().minus(period);
-        String sql = """
-            SELECT braincell_status, COUNT(*) as count 
-            FROM post_history 
-            WHERE posted_at >= ?
-            GROUP BY braincell_status
-            """;
-
-        Map<String, Integer> distribution = new HashMap<>();
-        try (PreparedStatement pstmt = connection.prepareStatement(sql)) {
-            pstmt.setString(1, cutoff.format(SQL_DATETIME_FORMAT));
-
-            try (ResultSet rs = pstmt.executeQuery()) {
-                while (rs.next()) {
-                    distribution.put(rs.getString("braincell_status"), rs.getInt("count"));
-                }
-            }
-        } catch (SQLException e) {
-            log.error("Failed to get braincell status distribution", e);
-        }
-
-        return distribution;
-    }
-
-    public Map<String, Integer> getConfusionDistribution(Period period) {
-        LocalDateTime cutoff = LocalDateTime.now().minus(period);
-        String sql = """
-            SELECT confusion_index, COUNT(*) as count 
-            FROM post_history 
-            WHERE posted_at >= ?
-            GROUP BY confusion_index
-            """;
-
-        Map<String, Integer> distribution = new LinkedHashMap<>();
-        try (PreparedStatement pstmt = connection.prepareStatement(sql)) {
-            pstmt.setString(1, cutoff.format(SQL_DATETIME_FORMAT));
-
-            try (ResultSet rs = pstmt.executeQuery()) {
-                while (rs.next()) {
-                    distribution.put(rs.getString("confusion_index"), rs.getInt("count"));
-                }
-            }
-        } catch (SQLException e) {
-            log.error("Failed to get confusion distribution", e);
-        }
-
-        return distribution;
-    }
-
-    public int getCommandUsageCount(Period period) {
-        LocalDateTime cutoff = LocalDateTime.now().minus(period);
-        String sql = "SELECT COUNT(*) FROM command_usage WHERE executed_at >= ?";
-
-        try (PreparedStatement pstmt = connection.prepareStatement(sql)) {
-            pstmt.setString(1, cutoff.format(SQL_DATETIME_FORMAT));
-
-            try (ResultSet rs = pstmt.executeQuery()) {
                 if (rs.next()) {
                     return rs.getInt(1);
                 }
+            } catch (SQLException e) {
+                log.error("Failed to get total post count", e);
             }
-        } catch (SQLException e) {
-            log.error("Failed to get command usage count", e);
-        }
 
-        return 0;
+            return 0;
+        }
+    }
+
+    public double getAverageCoherence(Period period) {
+        synchronized (dbLock) {
+            LocalDateTime cutoff = LocalDateTime.now().minus(period);
+            String sql = "SELECT AVG(coherence_level) FROM post_history WHERE posted_at >= ?";
+
+            try (PreparedStatement pstmt = connection.prepareStatement(sql)) {
+                pstmt.setString(1, cutoff.format(SQL_DATETIME_FORMAT));
+
+                try (ResultSet rs = pstmt.executeQuery()) {
+                    if (rs.next()) {
+                        return rs.getDouble(1);
+                    }
+                }
+            } catch (SQLException e) {
+                log.error("Failed to get average coherence", e);
+            }
+
+            return 0.0;
+        }
+    }
+
+    public Map<String, Integer> getBraincellStatusDistribution(Period period) {
+        synchronized (dbLock) {
+            LocalDateTime cutoff = LocalDateTime.now().minus(period);
+            String sql = """
+                SELECT braincell_status, COUNT(*) as count 
+                FROM post_history 
+                WHERE posted_at >= ?
+                GROUP BY braincell_status
+                """;
+
+            Map<String, Integer> distribution = new HashMap<>();
+            try (PreparedStatement pstmt = connection.prepareStatement(sql)) {
+                pstmt.setString(1, cutoff.format(SQL_DATETIME_FORMAT));
+
+                try (ResultSet rs = pstmt.executeQuery()) {
+                    while (rs.next()) {
+                        distribution.put(rs.getString("braincell_status"), rs.getInt("count"));
+                    }
+                }
+            } catch (SQLException e) {
+                log.error("Failed to get braincell status distribution", e);
+            }
+
+            return distribution;
+        }
+    }
+
+    public Map<String, Integer> getConfusionDistribution(Period period) {
+        synchronized (dbLock) {
+            LocalDateTime cutoff = LocalDateTime.now().minus(period);
+            String sql = """
+                SELECT confusion_index, COUNT(*) as count 
+                FROM post_history 
+                WHERE posted_at >= ?
+                GROUP BY confusion_index
+                """;
+
+            Map<String, Integer> distribution = new LinkedHashMap<>();
+            try (PreparedStatement pstmt = connection.prepareStatement(sql)) {
+                pstmt.setString(1, cutoff.format(SQL_DATETIME_FORMAT));
+
+                try (ResultSet rs = pstmt.executeQuery()) {
+                    while (rs.next()) {
+                        distribution.put(rs.getString("confusion_index"), rs.getInt("count"));
+                    }
+                }
+            } catch (SQLException e) {
+                log.error("Failed to get confusion distribution", e);
+            }
+
+            return distribution;
+        }
+    }
+
+    public int getCommandUsageCount(Period period) {
+        synchronized (dbLock) {
+            LocalDateTime cutoff = LocalDateTime.now().minus(period);
+            String sql = "SELECT COUNT(*) FROM command_usage WHERE executed_at >= ?";
+
+            try (PreparedStatement pstmt = connection.prepareStatement(sql)) {
+                pstmt.setString(1, cutoff.format(SQL_DATETIME_FORMAT));
+
+                try (ResultSet rs = pstmt.executeQuery()) {
+                    if (rs.next()) {
+                        return rs.getInt(1);
+                    }
+                }
+            } catch (SQLException e) {
+                log.error("Failed to get command usage count", e);
+            }
+
+            return 0;
+        }
     }
 
     public Map<String, Integer> getTopCommands(Period period, int limit) {
-        LocalDateTime cutoff = LocalDateTime.now().minus(period);
-        String sql = """
-            SELECT command_name || COALESCE(' ' || subcommand, '') as full_command, 
-                   COUNT(*) as count
-            FROM command_usage 
-            WHERE executed_at >= ?
-            GROUP BY full_command
-            ORDER BY count DESC
-            LIMIT ?
-            """;
+        synchronized (dbLock) {
+            LocalDateTime cutoff = LocalDateTime.now().minus(period);
+            String sql = """
+                SELECT command_name || COALESCE(' ' || subcommand, '') as full_command, 
+                       COUNT(*) as count
+                FROM command_usage 
+                WHERE executed_at >= ?
+                GROUP BY full_command
+                ORDER BY count DESC
+                LIMIT ?
+                """;
 
-        Map<String, Integer> commands = new LinkedHashMap<>();
-        try (PreparedStatement pstmt = connection.prepareStatement(sql)) {
-            pstmt.setString(1, cutoff.format(SQL_DATETIME_FORMAT));
-            pstmt.setInt(2, limit);
+            Map<String, Integer> commands = new LinkedHashMap<>();
+            try (PreparedStatement pstmt = connection.prepareStatement(sql)) {
+                pstmt.setString(1, cutoff.format(SQL_DATETIME_FORMAT));
+                pstmt.setInt(2, limit);
 
-            try (ResultSet rs = pstmt.executeQuery()) {
-                while (rs.next()) {
-                    commands.put(rs.getString("full_command"), rs.getInt("count"));
+                try (ResultSet rs = pstmt.executeQuery()) {
+                    while (rs.next()) {
+                        commands.put(rs.getString("full_command"), rs.getInt("count"));
+                    }
                 }
+            } catch (SQLException e) {
+                log.error("Failed to get top commands", e);
             }
-        } catch (SQLException e) {
-            log.error("Failed to get top commands", e);
-        }
 
-        return commands;
+            return commands;
+        }
     }
 
     // ==================== CLEANUP ====================
 
     @Override
     public void close() {
-        try {
-            if (connection != null && !connection.isClosed()) {
-                connection.close();
-                log.info("Database connection closed");
+        synchronized (dbLock) {
+            try {
+                if (connection != null && !connection.isClosed()) {
+                    connection.close();
+                    log.info("Database connection closed");
+                }
+            } catch (SQLException e) {
+                log.error("Error closing database connection", e);
             }
-        } catch (SQLException e) {
-            log.error("Error closing database connection", e);
         }
     }
 }
