@@ -266,13 +266,15 @@ public class SchedulerService {
             delaySeconds = ChronoUnit.SECONDS.between(now, statsTime);
         }
 
+        var targetDate = statsTime.toLocalDate();
+
         log.info("End-of-day best/worst day check scheduled for {} in {} seconds ({} hours)",
                 statsTime.format(TIME_FORMATTER), delaySeconds, String.format("%.1f", delaySeconds / 3600.0));
 
         endOfDayStatsTask = scheduler.schedule(() -> {
             try {
-                log.info("=== End of day reached - checking if {} is a best/worst day ===", today);
-                persistenceService.updateBestWorstDayIfNeeded(today);
+                log.info("=== End of day reached - checking if {} is a best/worst day ===", targetDate);
+                persistenceService.updateBestWorstDayIfNeeded(targetDate);
 
                 scheduleEndOfDayStats();
             } catch (Exception e) {
