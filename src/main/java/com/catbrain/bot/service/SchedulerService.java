@@ -29,6 +29,7 @@ public class SchedulerService {
     private final List<LocalDateTime> scheduledTimes = Collections.synchronizedList(new ArrayList<>());
 
     private volatile ScheduledFuture<?> midnightTask;
+    private volatile ScheduledFuture<?> endOfDayStatsTask;
 
     private int minDailyPosts;
     private int maxDailyPosts;
@@ -58,6 +59,7 @@ public class SchedulerService {
         }
 
         scheduleMidnightReschedule(startHour, endHour, postAction);
+        scheduleEndOfDayStats();
     }
 
     private boolean restoreScheduleFromDatabase(Runnable postAction) {
@@ -241,6 +243,45 @@ public class SchedulerService {
         }, delaySeconds, TimeUnit.SECONDS);
     }
 
+    private void scheduleEndOfDayStats() {
+        if (persistenceService == null) {
+            log.warn("Persistence service not available, cannot schedule end-of-day stats");
+            return;
+        }
+
+        var now = LocalDateTime.now();
+
+        var today = now.toLocalDate();
+        var statsTime = today.atTime(23, 58, 0);
+
+        if (!now.isBefore(statsTime)) {
+            statsTime = today.plusDays(1).atTime(23, 58, 0);
+        }
+
+        var delaySeconds = ChronoUnit.SECONDS.between(now, statsTime);
+
+        if (delaySeconds < 10) {
+            log.warn("Calculated delay is only {} seconds, forcing next day schedule", delaySeconds);
+            statsTime = today.plusDays(1).atTime(23, 58, 0);
+            delaySeconds = ChronoUnit.SECONDS.between(now, statsTime);
+        }
+
+        log.info("End-of-day best/worst day check scheduled for {} in {} seconds ({} hours)",
+                statsTime.format(TIME_FORMATTER), delaySeconds, String.format("%.1f", delaySeconds / 3600.0));
+
+        endOfDayStatsTask = scheduler.schedule(() -> {
+            try {
+                log.info("=== End of day reached - checking if {} is a best/worst day ===", today);
+                persistenceService.updateBestWorstDayIfNeeded(today);
+
+                scheduleEndOfDayStats();
+            } catch (Exception e) {
+                log.error("Error during end-of-day best/worst day check", e);
+                scheduleEndOfDayStats();
+            }
+        }, delaySeconds, TimeUnit.SECONDS);
+    }
+
     private void clearPreviousDayTasks() {
         synchronized (scheduledPosts) {
             int remainingTasks = (int) scheduledPosts.stream()
@@ -265,6 +306,11 @@ public class SchedulerService {
         var task = midnightTask;
         if (task != null && !task.isDone()) {
             task.cancel(false);
+        }
+
+        var statsTask = endOfDayStatsTask;
+        if (statsTask != null && !statsTask.isDone()) {
+            statsTask.cancel(false);
         }
     }
 

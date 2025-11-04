@@ -15,7 +15,7 @@ import java.util.*;
 public class PersistenceService implements AutoCloseable {
     private static final DateTimeFormatter SQL_DATETIME_FORMAT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
-    private final Object dbLock = new Object(); // Thread-safety lock
+    private final Object dbLock = new Object();
     private final Connection connection;
 
     public PersistenceService() throws SQLException {
@@ -113,6 +113,17 @@ public class PersistenceService implements AutoCloseable {
                 CREATE TABLE IF NOT EXISTS bot_state (
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """,
+                    """
+                CREATE TABLE IF NOT EXISTS best_worst_days (
+                    type TEXT PRIMARY KEY CHECK(type IN ('best', 'worst')),
+                    date TEXT NOT NULL,
+                    post_count INTEGER NOT NULL,
+                    avg_coherence REAL NOT NULL,
+                    dominant_status TEXT NOT NULL,
+                    quality_score REAL NOT NULL,
                     updated_at TEXT NOT NULL
                 )
                 """
@@ -437,6 +448,150 @@ public class PersistenceService implements AutoCloseable {
 
             return commands;
         }
+    }
+
+    // ==================== BEST/WORST DAY TRACKING ====================
+
+    public void updateBestWorstDayIfNeeded(LocalDate date) {
+        synchronized (dbLock) {
+            log.info("Checking if {} should update best/worst day records", date);
+
+            String sql = """
+                SELECT 
+                    COUNT(*) as post_count,
+                    AVG(coherence_level) as avg_coherence,
+                    braincell_status
+                FROM post_history
+                WHERE DATE(posted_at) = ?
+                GROUP BY braincell_status
+                ORDER BY COUNT(*) DESC
+                LIMIT 1
+                """;
+
+            try (PreparedStatement pstmt = connection.prepareStatement(sql)) {
+                pstmt.setString(1, date.toString());
+
+                try (ResultSet rs = pstmt.executeQuery()) {
+                    if (!rs.next()) {
+                        log.warn("No posts found for date {}, skipping best/worst update", date);
+                        return;
+                    }
+
+                    int postCount = rs.getInt("post_count");
+                    double avgCoherence = rs.getDouble("avg_coherence");
+                    String dominantStatus = rs.getString("braincell_status");
+
+                    double normalizedPostCount = Math.min(postCount / 20.0, 1.0);
+                    double qualityScore = (avgCoherence * 0.7) + (normalizedPostCount * 100 * 0.3);
+
+                    log.debug("Today's stats - Posts: {}, Coherence: {}%, Quality: {}",
+                            postCount, avgCoherence, qualityScore);
+
+                    updateIfBetter(date, postCount, avgCoherence, dominantStatus, qualityScore, true);
+
+                    updateIfBetter(date, postCount, avgCoherence, dominantStatus, qualityScore, false);
+
+                }
+            } catch (SQLException e) {
+                log.error("Failed to update best/worst day for {}", date, e);
+            }
+        }
+    }
+
+    private void updateIfBetter(LocalDate date, int postCount, double avgCoherence,
+                                String dominantStatus, double qualityScore, boolean isBest) {
+        String type = isBest ? "best" : "worst";
+
+        String selectSql = "SELECT quality_score FROM best_worst_days WHERE type = ?";
+
+        try (PreparedStatement pstmt = connection.prepareStatement(selectSql)) {
+            pstmt.setString(1, type);
+
+            try (ResultSet rs = pstmt.executeQuery()) {
+                boolean shouldUpdate = false;
+
+                if (!rs.next()) {
+                    shouldUpdate = true;
+                    log.info("No {} day record exists, inserting first record", type);
+                } else {
+                    double currentScore = rs.getDouble("quality_score");
+
+                    if (isBest && qualityScore > currentScore) {
+                        shouldUpdate = true;
+                        log.info("New best day! {} (score: {}) beats previous best (score: {})",
+                                date, qualityScore, currentScore);
+                    } else if (!isBest && qualityScore < currentScore) {
+                        shouldUpdate = true;
+                        log.info("New worst day! {} (score: {}) beats previous worst (score: {})",
+                                date, qualityScore, currentScore);
+                    }
+                }
+
+                if (shouldUpdate) {
+                    saveBestWorstDay(type, date, postCount, avgCoherence, dominantStatus, qualityScore);
+                }
+            }
+        } catch (SQLException e) {
+            log.error("Failed to check/update {} day", type, e);
+        }
+    }
+
+    private void saveBestWorstDay(String type, LocalDate date, int postCount, double avgCoherence,
+                                  String dominantStatus, double qualityScore) throws SQLException {
+        String sql = """
+            INSERT OR REPLACE INTO best_worst_days 
+            (type, date, post_count, avg_coherence, dominant_status, quality_score, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """;
+
+        try (PreparedStatement pstmt = connection.prepareStatement(sql)) {
+            pstmt.setString(1, type);
+            pstmt.setString(2, date.toString());
+            pstmt.setInt(3, postCount);
+            pstmt.setDouble(4, avgCoherence);
+            pstmt.setString(5, dominantStatus);
+            pstmt.setDouble(6, qualityScore);
+            pstmt.setString(7, LocalDateTime.now().format(SQL_DATETIME_FORMAT));
+
+            pstmt.executeUpdate();
+            log.info("Updated {} day record: {} (quality score: {})", type, date, qualityScore);
+        }
+    }
+
+    public Optional<com.catbrain.bot.model.DailyStats> getBestDay() {
+        synchronized (dbLock) {
+            return getBestWorstDay("best");
+        }
+    }
+
+    public Optional<com.catbrain.bot.model.DailyStats> getWorstDay() {
+        synchronized (dbLock) {
+            return getBestWorstDay("worst");
+        }
+    }
+
+    private Optional<com.catbrain.bot.model.DailyStats> getBestWorstDay(String type) {
+        String sql = "SELECT date, post_count, avg_coherence, dominant_status, quality_score FROM best_worst_days WHERE type = ?";
+
+        try (PreparedStatement pstmt = connection.prepareStatement(sql)) {
+            pstmt.setString(1, type);
+
+            try (ResultSet rs = pstmt.executeQuery()) {
+                if (rs.next()) {
+                    return Optional.of(new com.catbrain.bot.model.DailyStats(
+                            LocalDate.parse(rs.getString("date")),
+                            rs.getInt("post_count"),
+                            rs.getDouble("avg_coherence"),
+                            rs.getString("dominant_status"),
+                            rs.getDouble("quality_score")
+                    ));
+                }
+            }
+        } catch (SQLException e) {
+            log.error("Failed to get {} day", type, e);
+        }
+
+        return Optional.empty();
     }
 
     // ==================== CLEANUP ====================

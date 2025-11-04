@@ -220,7 +220,7 @@ public class SlashCommandListener extends ListenerAdapter {
                 case "day" -> Period.ofDays(1);
                 case "week" -> Period.ofWeeks(1);
                 case "month" -> Period.ofMonths(1);
-                case "alltime" -> Period.ofYears(100); // Effectively all time
+                case "alltime" -> Period.ofYears(100);
                 default -> Period.ofWeeks(1);
             };
 
@@ -303,6 +303,36 @@ public class SlashCommandListener extends ListenerAdapter {
                 );
                 embed.addField("🏆 Top Commands", commandText.toString().trim(), true);
             }
+
+            embed.addBlankField(true);
+        }
+
+        var bestDay = persistenceService.getBestDay();
+        var worstDay = persistenceService.getWorstDay();
+
+        if (bestDay.isPresent() && worstDay.isPresent()) {
+            var best = bestDay.get();
+            var worst = worstDay.get();
+
+            String bestDayText = String.format(
+                    "**%s**\n%d posts %.1f%% coherence\n*Quality Score: %.1f*",
+                    best.date().format(java.time.format.DateTimeFormatter.ofPattern("MMM d, yyyy")),
+                    best.postCount(),
+                    best.avgCoherence(),
+                    best.qualityScore()
+            );
+
+            String worstDayText = String.format(
+                    "**%s**\n%d posts %.1f%% coherence\n*Quality Score: %.1f*",
+                    worst.date().format(java.time.format.DateTimeFormatter.ofPattern("MMM d, yyyy")),
+                    worst.postCount(),
+                    worst.avgCoherence(),
+                    worst.qualityScore()
+            );
+
+            embed.addField("Best Day", bestDayText, true);
+            embed.addField("Worst Day", worstDayText, true);
+            embed.addBlankField(true);
         }
 
         if (!periodLabel.equals("All Time")) {
