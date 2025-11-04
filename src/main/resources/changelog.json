@@ -1,0 +1,73 @@
+{
+  "versions": [
+    {
+      "version": "0.3.0",
+      "phase": 3,
+      "date": "2025-11-04",
+      "changes": {
+        "added": [
+          "/catbrain changelog command with optional version parameter and autocomplete support",
+          "/catbrain stats command with period-based analytics (day/week/month/alltime)",
+          "SQLite database for persistent post history and analytics",
+          "Schedule restoration from database on bot restart",
+          "Configurable min/max daily posts (replacing single daily.posts config)",
+          "Command usage logging and analytics tracking",
+          "Best/worst day tracking with quality scoring algorithm",
+          "Detailed statistics embeds with status and confusion distributions",
+          "Top commands display in stats command"
+        ],
+        "fixed": [],
+        "changed": [
+          "Switched from SimpleLogger to Logback for improved logging and file output",
+          "Added Gson dependency for JSON changelog parsing",
+          "Added SQLite JDBC dependency for database persistence",
+          "Changelog now loaded from JSON resource file at startup"
+        ],
+        "removed": []
+      }
+    },
+    {
+      "version": "0.2.0",
+      "phase": 2,
+      "date": "2025-10-27",
+      "changes": {
+        "added": [
+          "Slash commands: /catbrain check, help, changelog with ephemeral replies",
+          "Optional guild/channel restriction for commands",
+          "Rich Discord embeds for status posts with color-coded state",
+          "ETA countdown to next scheduled post",
+          "Multi-post scheduling with minimum spacing between posts",
+          "Automatic midnight reschedule for next day's posts",
+          "Improved next-post awareness in status updates",
+          "Runtime version reporting (human-friendly 'Cat Brain Bot v...')"
+        ],
+        "fixed": [
+          "Minor bugfixes"
+        ],
+        "changed": [
+          "Release bumped to 0.2.0 with manifest metadata added",
+          "Increased debug logging and scheduling diagnostics",
+          "Added configurable optional guild restriction"
+        ],
+        "removed": []
+      }
+    },
+    {
+      "version": "0.1.0",
+      "phase": 1,
+      "date": "2025-10-20",
+      "changes": {
+        "added": [
+          "Discord bot that automatically posts daily status updates to designated channel",
+          "Configurable posting frequency and daily time window for status updates",
+          "Status messages display randomized operational metrics",
+          "System coherence and processing information display",
+          "Graceful shutdown handling for clean bot disconnection"
+        ],
+        "fixed": [],
+        "changed": [],
+        "removed": []
+      }
+    }
+  ]
+}

@@ -8,6 +8,7 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 import java.util.Random;
@@ -23,20 +24,134 @@ public class SchedulerService {
 
     private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(2);
     private final Random random = new SecureRandom();
-    private final List<ScheduledFuture<?>> scheduledPosts = new ArrayList<>();
-    private final List<LocalDateTime> scheduledTimes = new ArrayList<>();
-    private ScheduledFuture<?> midnightTask;
 
-    public void scheduleDailyPosts(int postCount, int startHour, int endHour, Runnable postAction) {
+    private final List<ScheduledFuture<?>> scheduledPosts = Collections.synchronizedList(new ArrayList<>());
+    private final List<LocalDateTime> scheduledTimes = Collections.synchronizedList(new ArrayList<>());
+
+    private volatile ScheduledFuture<?> midnightTask;
+    private volatile ScheduledFuture<?> endOfDayStatsTask;
+
+    private int minDailyPosts;
+    private int maxDailyPosts;
+    private PersistenceService persistenceService;
+
+    public void scheduleDailyPosts(int minPosts, int maxPosts, int startHour, int endHour,
+                                   Runnable postAction, PersistenceService persistence) {
+        // Validate parameters early
+        if (minPosts > maxPosts) {
+            throw new IllegalArgumentException(String.format(
+                    "minPosts must be <= maxPosts: received minPosts=%d, maxPosts=%d", minPosts, maxPosts));
+        }
+        if (minPosts <= 0) {
+            throw new IllegalArgumentException(String.format(
+                    "minPosts must be > 0: received minPosts=%d", minPosts));
+        }
+
+        this.minDailyPosts = minPosts;
+        this.maxDailyPosts = maxPosts;
+        this.persistenceService = persistence;
+
+        if (restoreScheduleFromDatabase(postAction)) {
+            log.info("Schedule restored from database after restart");
+        } else {
+            int postCount = generateRandomPostCount(minPosts, maxPosts);
+            schedulePostsWithCount(postCount, startHour, endHour, postAction);
+        }
+
+        scheduleMidnightReschedule(startHour, endHour, postAction);
+        scheduleEndOfDayStats();
+    }
+
+    private boolean restoreScheduleFromDatabase(Runnable postAction) {
+        if (persistenceService == null) {
+            log.warn("Persistence service not available, cannot restore schedule");
+            return false;
+        }
+
+        var unexecuted = persistenceService.getUnexecutedSchedules();
+        if (unexecuted.isEmpty()) {
+            log.info("No unexecuted schedules found in database");
+            return false;
+        }
+
         var now = LocalDateTime.now();
+        var today = now.toLocalDate();
+
+        var todaySchedules = unexecuted.stream()
+                .filter(time -> time.toLocalDate().equals(today))
+                .toList();
+
+        if (todaySchedules.isEmpty()) {
+            log.info("No schedules for today found in database, will create new schedule");
+            persistenceService.clearOldSchedules(today);
+            return false;
+        }
+
+        log.info("Found {} scheduled posts for today in database", todaySchedules.size());
+
+        synchronized (scheduledTimes) {
+            scheduledTimes.clear();
+            scheduledTimes.addAll(todaySchedules);
+        }
+
+        int restored = 0;
+        int skipped = 0;
+        for (LocalDateTime time : todaySchedules) {
+            if (time.isAfter(now)) {
+                schedulePost(time, postAction, true);
+                restored++;
+            } else {
+                persistenceService.markPostExecuted(time);
+                skipped++;
+                log.debug("Marked missed post as executed: {}", time.format(TIME_FORMATTER));
+            }
+        }
+
+        log.info("Restored {} future posts, marked {} missed posts as executed", restored, skipped);
+
+        persistenceService.clearOldSchedules(today);
+
+        return restored > 0;
+    }
+
+    private int generateRandomPostCount(int min, int max) {
+        if (min == max) {
+            return min;
+        }
+        int count = min + random.nextInt(max - min + 1);
+
+        log.info("Cat brain intensity for today: {} moments scheduled", count);
+        log.debug("Random post count generated: {} (range: {}-{})", count, min, max);
+
+        return count;
+    }
+
+    private void schedulePostsWithCount(int postCount, int startHour, int endHour, Runnable postAction) {
+        var now = LocalDateTime.now();
+
+        int windowMinutes = (endHour - startHour) * 60;
+        int maxPossiblePosts = windowMinutes / MIN_SPACING_MINUTES;
+
+        if (postCount > maxPossiblePosts) {
+            log.warn("Requested {} posts cannot fit in {}h window with {}-minute spacing " +
+                            "(max: {}). Capping at {} posts.",
+                    postCount, (endHour - startHour), MIN_SPACING_MINUTES, maxPossiblePosts, maxPossiblePosts);
+            postCount = maxPossiblePosts;
+        }
 
         var times = generateRandomTimesWithSpacing(postCount, startHour, endHour)
                 .stream()
                 .sorted()
                 .toList();
 
-        scheduledTimes.clear();
-        scheduledTimes.addAll(times);
+        synchronized (scheduledTimes) {
+            scheduledTimes.clear();
+            scheduledTimes.addAll(times);
+        }
+
+        if (persistenceService != null) {
+            persistenceService.saveScheduledPosts(times);
+        }
 
         var currentHour = now.getHour();
         var dayLabel = (currentHour >= endHour) ? "tomorrow" : "today";
@@ -47,7 +162,7 @@ public class SchedulerService {
         int scheduled = 0;
         for (LocalDateTime time : times) {
             if (time.isAfter(now)) {
-                schedulePost(time, postAction);
+                schedulePost(time, postAction, false);
                 scheduled++;
             } else {
                 log.debug("Skipping past time: {}", time.format(TIME_FORMATTER));
@@ -55,41 +170,51 @@ public class SchedulerService {
         }
 
         log.info("Scheduled {} posts (skipped {} past times)", scheduled, postCount - scheduled);
-
-        scheduleMidnightReschedule(postCount, startHour, endHour, postAction);
     }
 
     public Optional<LocalDateTime> getNextScheduledPostTime() {
         var now = LocalDateTime.now();
-        return scheduledTimes.stream()
-                .filter(time -> time.isAfter(now))
-                .min(LocalDateTime::compareTo);
+        var threshold = now.plusSeconds(5);
+
+        synchronized (scheduledTimes) {
+            return scheduledTimes.stream()
+                    .filter(time -> time.isAfter(threshold))
+                    .min(LocalDateTime::compareTo);
+        }
     }
 
-    private void schedulePost(LocalDateTime scheduledTime, Runnable postAction) {
+    private void schedulePost(LocalDateTime scheduledTime, Runnable postAction, boolean isRestored) {
         var now = LocalDateTime.now();
         var delaySeconds = Math.max(1, ChronoUnit.SECONDS.between(now, scheduledTime));
 
-        log.debug("Scheduling post for {} in {} seconds",
-                scheduledTime.format(TIME_FORMATTER), delaySeconds);
+        log.debug("Scheduling post for {} in {} seconds{}",
+                scheduledTime.format(TIME_FORMATTER),
+                delaySeconds,
+                isRestored ? " (restored from DB)" : "");
 
         Runnable safePostAction = () -> {
             try {
                 log.info("Executing scheduled post now (was scheduled for {})",
                         scheduledTime.format(TIME_FORMATTER));
                 postAction.run();
+
+                if (persistenceService != null) {
+                    persistenceService.markPostExecuted(scheduledTime);
+                }
             } catch (Exception e) {
                 log.error("Error executing post action", e);
             }
         };
 
         var future = scheduler.schedule(safePostAction, delaySeconds, TimeUnit.SECONDS);
-        scheduledPosts.add(future);
+        synchronized (scheduledPosts) {
+            scheduledPosts.add(future);
+        }
 
         log.debug("Post successfully scheduled for {}", scheduledTime.format(TIME_FORMATTER));
     }
 
-    private void scheduleMidnightReschedule(int postCount, int startHour, int endHour, Runnable postAction) {
+    private void scheduleMidnightReschedule(int startHour, int endHour, Runnable postAction) {
         var now = LocalDateTime.now();
 
         var nextMidnight = now.toLocalDate().plusDays(1).atStartOfDay();
@@ -101,37 +226,93 @@ public class SchedulerService {
         }
 
         log.info("Next schedule refresh at midnight in {} seconds ({} hours)",
-                delaySeconds, delaySeconds / 3600.0);
+                delaySeconds, String.format("%.1f", delaySeconds / 3600.0));
 
         midnightTask = scheduler.schedule(() -> {
             try {
-                log.info("=== Midnight reached - rescheduling daily posts ===");
+                log.info("=== Midnight reached - generating new random post schedule ===");
                 clearPreviousDayTasks();
-                scheduleDailyPosts(postCount, startHour, endHour, postAction);
+
+                int newPostCount = generateRandomPostCount(minDailyPosts, maxDailyPosts);
+                schedulePostsWithCount(newPostCount, startHour, endHour, postAction);
+
+                scheduleMidnightReschedule(startHour, endHour, postAction);
             } catch (Exception e) {
                 log.error("Error during midnight rescheduling", e);
             }
         }, delaySeconds, TimeUnit.SECONDS);
     }
 
-    private void clearPreviousDayTasks() {
-        int remainingTasks = (int) scheduledPosts.stream()
-                .filter(future -> !future.isDone())
-                .count();
+    private void scheduleEndOfDayStats() {
+        if (persistenceService == null) {
+            log.warn("Persistence service not available, cannot schedule end-of-day stats");
+            return;
+        }
 
-        log.info("Clearing {} remaining tasks from previous day (total: {})",
-                remainingTasks, scheduledPosts.size());
+        var now = LocalDateTime.now();
 
-        scheduledPosts.forEach(future -> {
-            if (!future.isDone()) {
-                future.cancel(false);
+        var today = now.toLocalDate();
+        var statsTime = today.atTime(23, 58, 0);
+
+        if (!now.isBefore(statsTime)) {
+            statsTime = today.plusDays(1).atTime(23, 58, 0);
+        }
+
+        var delaySeconds = ChronoUnit.SECONDS.between(now, statsTime);
+
+        if (delaySeconds < 10) {
+            log.warn("Calculated delay is only {} seconds, forcing next day schedule", delaySeconds);
+            statsTime = today.plusDays(1).atTime(23, 58, 0);
+            delaySeconds = ChronoUnit.SECONDS.between(now, statsTime);
+        }
+
+        var targetDate = statsTime.toLocalDate();
+
+        log.info("End-of-day best/worst day check scheduled for {} in {} seconds ({} hours)",
+                statsTime.format(TIME_FORMATTER), delaySeconds, String.format("%.1f", delaySeconds / 3600.0));
+
+        endOfDayStatsTask = scheduler.schedule(() -> {
+            try {
+                log.info("=== End of day reached - checking if {} is a best/worst day ===", targetDate);
+                persistenceService.updateBestWorstDayIfNeeded(targetDate);
+
+                scheduleEndOfDayStats();
+            } catch (Exception e) {
+                log.error("Error during end-of-day best/worst day check", e);
+                scheduleEndOfDayStats();
             }
-        });
-        scheduledPosts.clear();
-        scheduledTimes.clear();
+        }, delaySeconds, TimeUnit.SECONDS);
+    }
 
-        if (midnightTask != null && !midnightTask.isDone()) {
-            midnightTask.cancel(false);
+    private void clearPreviousDayTasks() {
+        synchronized (scheduledPosts) {
+            int remainingTasks = (int) scheduledPosts.stream()
+                    .filter(future -> !future.isDone())
+                    .count();
+
+            log.info("Clearing {} remaining tasks from previous day (total: {})",
+                    remainingTasks, scheduledPosts.size());
+
+            scheduledPosts.forEach(future -> {
+                if (!future.isDone()) {
+                    future.cancel(false);
+                }
+            });
+            scheduledPosts.clear();
+        }
+
+        synchronized (scheduledTimes) {
+            scheduledTimes.clear();
+        }
+
+        var task = midnightTask;
+        if (task != null && !task.isDone()) {
+            task.cancel(false);
+        }
+
+        var statsTask = endOfDayStatsTask;
+        if (statsTask != null && !statsTask.isDone()) {
+            statsTask.cancel(false);
         }
     }
 

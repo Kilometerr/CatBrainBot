@@ -2,6 +2,8 @@ package com.catbrain.bot;
 
 import com.catbrain.bot.config.BotConfig;
 import com.catbrain.bot.listener.SlashCommandListener;
+import com.catbrain.bot.service.ChangelogManager;
+import com.catbrain.bot.service.PersistenceService;
 import com.catbrain.bot.service.SchedulerService;
 import com.catbrain.bot.service.StatusService;
 import com.catbrain.bot.util.StatusFormatter;
@@ -15,17 +17,28 @@ import net.dv8tion.jda.api.interactions.commands.build.SubcommandData;
 import net.dv8tion.jda.api.requests.GatewayIntent;
 import org.jetbrains.annotations.NotNull;
 
+import java.time.LocalDateTime;
+
 @Slf4j
 @RequiredArgsConstructor
 public class CatBrainBot {
     private final BotConfig config;
     private final StatusService statusService;
     private final SchedulerService schedulerService;
+    private final ChangelogManager changelogManager;
+    private final PersistenceService persistenceService;
 
     private JDA jda;
 
     public void start() throws InterruptedException {
         log.info("Cat Brain Bot starting...");
+
+        try {
+            changelogManager.load();
+            log.info("Changelog loaded successfully");
+        } catch (Exception e) {
+            log.error("Failed to load changelog - bot will continue but changelog command may not work", e);
+        }
 
         jda = JDABuilder.createDefault(config.botToken())
                 .enableIntents(GatewayIntent.GUILD_MESSAGES)
@@ -48,6 +61,16 @@ public class CatBrainBot {
                         new SubcommandData("check", "Check the current cat brain status"),
                         new SubcommandData("help", "Show help information and available commands"),
                         new SubcommandData("changelog", "View recent changes and updates")
+                                .addOption(net.dv8tion.jda.api.interactions.commands.OptionType.STRING,
+                                        "version",
+                                        "Specific version to view (e.g., 0.2.0). Leave empty for latest.",
+                                        false,
+                                        true),
+                        new SubcommandData("stats", "View bot statistics and analytics")
+                                .addOption(net.dv8tion.jda.api.interactions.commands.OptionType.STRING,
+                                        "period",
+                                        "Time period for statistics (day/week/month/alltime)",
+                                        false)
                 );
 
         if (config.guildId() != null) {
@@ -83,6 +106,8 @@ public class CatBrainBot {
         var slashCommandListener = new SlashCommandListener(
                 statusService,
                 schedulerService,
+                changelogManager,
+                persistenceService,
                 config.channelId(),
                 config.guildId()
         );
@@ -92,10 +117,12 @@ public class CatBrainBot {
 
     private void scheduleDailyPosts() {
         schedulerService.scheduleDailyPosts(
-                config.dailyPosts(),
+                config.minDailyPosts(),
+                config.maxDailyPosts(),
                 config.startHour(),
                 config.endHour(),
-                this::postStatusUpdate
+                this::postStatusUpdate,
+                persistenceService
         );
     }
 
@@ -116,7 +143,10 @@ public class CatBrainBot {
             var embed = StatusFormatter.format(status);
 
             channel.sendMessageEmbeds(embed).queue(
-                    success -> log.info("Status update posted successfully!"),
+                    success -> {
+                        log.info("Status update posted successfully!");
+                        persistenceService.savePost(status, LocalDateTime.now(), config.channelId());
+                    },
                     error -> log.error("Failed to post status update", error)
             );
         } catch (Exception e) {
@@ -136,6 +166,11 @@ public class CatBrainBot {
             log.debug("Scheduler shut down.");
         }
 
+        if (persistenceService != null) {
+            persistenceService.close();
+            log.debug("Persistence service shut down.");
+        }
+
         if (jda != null) {
             jda.shutdown();
             log.debug("JDA shut down.");
@@ -145,16 +180,31 @@ public class CatBrainBot {
     }
 
     public static void main(@NotNull String[] args) {
+        PersistenceService persistenceService = null;
         try {
             var config = BotConfig.load();
-            var bot = new CatBrainBot(config, new StatusService(), new SchedulerService());
+
+            persistenceService = new PersistenceService();
+            log.info("Persistence service initialized");
+
+            var bot = new CatBrainBot(
+                    config,
+                    new StatusService(),
+                    new SchedulerService(),
+                    new ChangelogManager(),
+                    persistenceService
+            );
             bot.start();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             log.error("Interrupted during bot startup", e);
+            persistenceService.close();
             System.exit(1);
         } catch (Exception e) {
             log.error("Failed to start Cat Brain Bot", e);
+            if (persistenceService != null) {
+                persistenceService.close();
+            }
             System.exit(1);
         }
     }
